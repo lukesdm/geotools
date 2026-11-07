@@ -632,6 +632,28 @@ public class ImageMosaicConfigHandler {
 
         // Add the granules collection to the store
         store.addGranules(collection);
+
+        // a (re)harvest of this location means the file may have changed: drop any stale cached image for it
+        invalidateCachedGranule(mosaicReader, mosaicConfiguration, fileLocation);
+    }
+
+    /**
+     * Drops the shared-cache entry for a granule location, resolving its URL the same way the read path does (the
+     * mosaic parent directory as the RELATIVE base). No-op when no cache is injected, or when the granule file no
+     * longer exists (URL resolution checks readability), so call this before deleting the file.
+     */
+    static void invalidateCachedGranule(
+            ImageMosaicReader mosaicReader, MosaicConfigurationBean mosaicConfiguration, String fileLocation) {
+        GranuleImageCache imageCache = mosaicReader.getGranuleImageCache();
+        File parentDirectory = mosaicReader.parentDirectory;
+        if (imageCache == null || mosaicConfiguration == null || parentDirectory == null || fileLocation == null) {
+            return;
+        }
+        PathType pathType = mosaicConfiguration.getCatalogConfigurationBean().getPathType();
+        URL granuleUrl = pathType.resolvePath(URLs.fileToUrl(parentDirectory).toString(), fileLocation);
+        if (granuleUrl != null) {
+            imageCache.invalidateGranule(granuleUrl);
+        }
     }
 
     private void handleStructuredGridCoverage(
@@ -837,7 +859,7 @@ public class ImageMosaicConfigHandler {
             final String rootMosaicDir) {
         final boolean isAbsolutePath = Boolean.parseBoolean(configuration.getParameter(Prop.ABSOLUTE_PATH));
         hints = updateHints(ancillaryFile, configuration, hints, Utils.AUXILIARY_FILES_PATH);
-        hints = updateHints(datastoreFile, configuration, hints, Utils.AUXILIARY_DATASTORE_PATH);
+
         // the ND readers use the parentDir in case the path was not absolute
         if (!isAbsolutePath) {
             hints.put(Utils.PARENT_DIR, rootMosaicDir);
@@ -1115,6 +1137,11 @@ public class ImageMosaicConfigHandler {
         properties.setProperty(Utils.Prop.EXP_RGB, Boolean.toString(mosaicConfiguration.isExpandToRGB()));
         properties.setProperty(
                 Utils.Prop.CHECK_AUXILIARY_METADATA, Boolean.toString(mosaicConfiguration.isCheckAuxiliaryMetadata()));
+        if (mosaicConfiguration.getRatGeometries() != Utils.DEFAULT_RAT_GEOMETRIES) {
+            properties.setProperty(
+                    Utils.Prop.RAT_GEOMETRIES,
+                    mosaicConfiguration.getRatGeometries().name());
+        }
         properties.setProperty(Utils.Prop.HETEROGENEOUS, Boolean.toString(catalogConfigurationBean.isHeterogeneous()));
         properties.setProperty(
                 Utils.Prop.HETEROGENEOUS_CRS, Boolean.toString(catalogConfigurationBean.isHeterogeneousCRS()));
@@ -1354,13 +1381,6 @@ public class ImageMosaicConfigHandler {
                         configBuilder.setAuxiliaryFilePath(auxiliaryFilePath);
                     }
                 }
-                if (runHints.containsKey(Utils.AUXILIARY_DATASTORE_PATH)) {
-                    String auxiliaryDatastorePath = (String) runHints.get(Utils.AUXILIARY_DATASTORE_PATH);
-                    if (auxiliaryDatastorePath != null
-                            && auxiliaryDatastorePath.trim().length() > 0) {
-                        configBuilder.setAuxiliaryDatastorePath(auxiliaryDatastorePath);
-                    }
-                }
             }
 
             final CatalogConfigurationBean catalogConfigurationBean = new CatalogConfigurationBean();
@@ -1392,6 +1412,8 @@ public class ImageMosaicConfigHandler {
             configBuilder.setCatalogConfigurationBean(catalogConfigurationBean);
             configBuilder.setCheckAuxiliaryMetadata(
                     IndexerUtils.getParameterAsBoolean(Prop.CHECK_AUXILIARY_METADATA, indexer));
+            configBuilder.setRatGeometries(
+                    RATGeometries.fromParameter(IndexerUtils.getParameter(Prop.RAT_GEOMETRIES, indexer)));
             catalogConfigurationBean.setPropertySelectionEnabled(
                     IndexerUtils.getParameterAsBoolean(Prop.PROPERTY_SELECTION, indexer));
 

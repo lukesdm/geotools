@@ -13,7 +13,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>unsupported</artifactId>
-    <version>35-SNAPSHOT</version>
+    <version>36-SNAPSHOT</version>
   </parent>
 
   <!-- =========================================================== -->
@@ -49,7 +49,7 @@
   </developers>
 
   <properties>
-    <tileverse.version>1.3.0</tileverse.version>
+    <tileverse.version>2.1.1</tileverse.version>
   </properties>
   <!-- =========================================================== -->
   <!--     Dependency Mangement                                    -->
@@ -84,8 +84,8 @@
       <artifactId>tileverse-pmtiles</artifactId>
     </dependency>
     <dependency>
-      <groupId>io.tileverse.rangereader</groupId>
-      <artifactId>tileverse-rangereader-all</artifactId>
+      <groupId>io.tileverse.storage</groupId>
+      <artifactId>tileverse-storage-all</artifactId>
     </dependency>
 
     <!-- test depedencies -->

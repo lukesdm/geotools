@@ -18,7 +18,6 @@ package org.geotools.http;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -66,6 +65,7 @@ public class MockHttpClient extends AbstractHttpClient {
         return getResponse(new Request(url, toByteArray(postContent), postContentType));
     }
 
+    @SuppressWarnings("PMD.UnusedReturnValue")
     private byte[] toByteArray(InputStream is) throws IOException {
         byte[] result;
         try (is) {
@@ -135,11 +135,7 @@ public class MockHttpClient extends AbstractHttpClient {
         }
 
         private static String decode(final String encoded) {
-            try {
-                return encoded == null ? null : URLDecoder.decode(encoded, "UTF-8");
-            } catch (final UnsupportedEncodingException e) {
-                throw new RuntimeException(e);
-            }
+            return encoded == null ? null : URLDecoder.decode(encoded, StandardCharsets.UTF_8);
         }
 
         public Request(URL url, byte[] postContent, String postContentType) {

@@ -16,6 +16,7 @@
  */
 package org.geotools.xsd;
 
+import static java.util.Collections.emptyList;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -27,7 +28,9 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -40,21 +43,26 @@ import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.resource.URIConverter;
+import org.eclipse.emf.ecore.resource.URIHandler;
 import org.eclipse.emf.ecore.resource.impl.ExtensibleURIConverterImpl;
 import org.eclipse.emf.ecore.resource.impl.ResourceSetImpl;
+import org.eclipse.emf.ecore.resource.impl.URIHandlerImpl;
 import org.eclipse.xsd.XSDElementDeclaration;
 import org.eclipse.xsd.XSDSchema;
 import org.eclipse.xsd.util.XSDSchemaLocationResolver;
 import org.geotools.util.NullEntityResolver;
 import org.geotools.util.PreventLocalEntityResolver;
+import org.geotools.util.URLs;
 import org.geotools.util.factory.Hints;
 import org.geotools.xs.XS;
 import org.geotools.xsd.impl.HTTPURIHandler;
 import org.hamcrest.CoreMatchers;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
+import org.xml.sax.EntityResolver;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 /** Tests for {@link org.geotools.xsd.Schemas}. */
 public class SchemasTest {
@@ -62,15 +70,9 @@ public class SchemasTest {
     File tmp, sub;
     private ExecutorService executorService = Executors.newSingleThreadExecutor();
 
-    @BeforeClass
-    public static void setupResolver() {
-        // tests need to be able to resolve local entities
-        Hints.putSystemDefault(Hints.ENTITY_RESOLVER, NullEntityResolver.INSTANCE);
-    }
-
     @Before
     public void setUp() throws Exception {
-
+        Hints.putSystemDefault(Hints.ENTITY_RESOLVER, NullEntityResolver.INSTANCE);
         tmp = File.createTempFile("schemas", "xsd");
         tmp.delete();
         tmp.mkdir();
@@ -158,14 +160,14 @@ public class SchemasTest {
         tmp.delete();
 
         System.setProperty(Schemas.FORCE_SCHEMA_IMPORT, "false");
-
+        Hints.removeSystemDefault(Hints.ENTITY_RESOLVER);
         executorService.shutdown();
     }
 
     @Test
     public void testValidateImportsIncludes() throws Exception {
         String location = new File(tmp, "root.xsd").getAbsolutePath();
-        List errors = Schemas.validateImportsIncludes(location);
+        List errors = Schemas.validateImportsIncludes(location, emptyList(), emptyList(), null);
         assertEquals(2, errors.size());
 
         SchemaLocationResolver resolver1 = new SchemaLocationResolver(XS.getInstance()) {
@@ -281,6 +283,14 @@ public class SchemasTest {
         }
     }
 
+    public static final class EmptyStringEntityResolver implements EntityResolver {
+
+        @Override
+        public InputSource resolveEntity(String publicId, String systemId) {
+            return new InputSource(new StringReader(""));
+        }
+    }
+
     /**
      * Test ensures no deadlock occurs when a remote schema is loaded, which resolves to the same JVM. Deadlock used to
      * occur in GeoServer, when schema was loaded from same GeoServer instance, because schema consumer and schema
@@ -314,5 +324,190 @@ public class SchemasTest {
         XSDSchema schema = Schemas.parse(
                 new File(sub, "test.xsd").getCanonicalPath(), null, null, null, NullEntityResolver.INSTANCE);
         assertEquals("root", ((XSDElementDeclaration) schema.getContents().get(0)).getName());
+    }
+
+    @Test
+    public void testWithCustomEntityResolver() {
+        assertThrows(
+                IOException.class,
+                () -> Schemas.validateImportsIncludes(
+                        this.getClass().getResource("custom.xsd").toExternalForm(),
+                        List.of(),
+                        List.of(),
+                        new EmptyStringEntityResolver()));
+    }
+
+    @Test
+    public void testWithNoEntityResolver() {
+        assertThrows(
+                IOException.class,
+                () -> Schemas.validateImportsIncludes(
+                        this.getClass().getResource("custom.xsd").toExternalForm(), List.of(), List.of()));
+    }
+
+    @Test
+    public void testValidateImportsIncludesResolvesImportLocations() throws Exception {
+        File rootFile = writeRootImporting("import1.xsd");
+        // accept the root, reject the imported location: the import must pass through the resolver
+        EntityResolver resolver = (publicId, systemId) -> {
+            if (systemId != null && systemId.endsWith("import1.xsd")) {
+                throw new SAXException("location rejected");
+            }
+            return null;
+        };
+        IOException exception = assertThrows(
+                IOException.class,
+                () -> Schemas.validateImportsIncludes(rootFile.getAbsolutePath(), List.of(), List.of(), resolver));
+        assertThat(exception.getMessage(), CoreMatchers.containsString("Could not resolve schema location"));
+        assertThat(exception.getMessage(), CoreMatchers.containsString("import1.xsd"));
+    }
+
+    @Test
+    public void testValidateImportsIncludesUsesResolvedSource() throws Exception {
+        // the resolver maps the mirror copy, which includes a missing file, to the complete local copy
+        File rootFile = writeRootImporting("mirror/import1.xsd");
+        File mirror = new File(tmp, "mirror");
+        mirror.mkdir();
+        write(
+                new File(mirror, "import1.xsd"),
+                "<xsd:schema xmlns='http://geotools.org/import1' "
+                        + "xmlns:xsd='http://www.w3.org/2001/XMLSchema' "
+                        + "targetNamespace='http://geotools.org/import1'> "
+                        + "<xsd:include location='missing.xsd'/>"
+                        + "</xsd:schema>");
+        File localCopy = new File(tmp, "import1.xsd");
+        List<String> resolved = new ArrayList<>();
+        EntityResolver resolver = (publicId, systemId) -> {
+            if (!systemId.endsWith("mirror/import1.xsd")) {
+                return null;
+            }
+            resolved.add(systemId);
+            return new InputSource(URLs.fileToUrl(localCopy).toExternalForm());
+        };
+
+        List errors = Schemas.validateImportsIncludes(rootFile.getAbsolutePath(), List.of(), List.of(), resolver);
+
+        assertEquals(List.of(), errors);
+        assertEquals(List.of(URLs.fileToUrl(new File(mirror, "import1.xsd")).toExternalForm()), resolved);
+    }
+
+    @Test
+    public void testValidateImportsIncludesPassesFileUris() throws Exception {
+        File rootFile = writeRootImporting("import1.xsd");
+        // accepts file URIs inside the test directory only
+        String allowed = URLs.fileToUrl(tmp).toExternalForm();
+        List<String> resolved = new ArrayList<>();
+        EntityResolver resolver = (publicId, systemId) -> {
+            if (!systemId.startsWith(allowed)) {
+                throw new SAXException("location rejected: " + systemId);
+            }
+            resolved.add(systemId);
+            return null;
+        };
+
+        List errors = Schemas.validateImportsIncludes(rootFile.getAbsolutePath(), List.of(), List.of(), resolver);
+
+        assertEquals(List.of(), errors);
+        assertEquals(
+                List.of(
+                        URLs.fileToUrl(rootFile).toExternalForm(),
+                        URLs.fileToUrl(new File(tmp, "import1.xsd")).toExternalForm()),
+                resolved);
+    }
+
+    @Test
+    public void testValidateImportsIncludesSkipsLocationsHandledLocally() throws Exception {
+        String location = "http://localhost/wfs?request=DescribeFeatureType&typeName=test:Feature";
+        List<String> read = new ArrayList<>();
+        URIHandler localHandler = new URIHandlerImpl() {
+            @Override
+            public boolean canHandle(URI uri) {
+                return uri.toString().equals(location);
+            }
+
+            @Override
+            public InputStream createInputStream(URI uri, Map<?, ?> options) {
+                read.add(uri.toString());
+                return InputStream.nullInputStream();
+            }
+        };
+        List<String> resolved = new ArrayList<>();
+        EntityResolver resolver = (publicId, systemId) -> {
+            resolved.add(systemId);
+            throw new SAXException("location rejected: " + systemId);
+        };
+
+        List errors = Schemas.validateImportsIncludes(
+                location, List.of(), List.of(), List.of(localHandler, new HTTPURIHandler()), resolver);
+
+        assertEquals(List.of(), errors);
+        assertEquals(List.of(), read);
+        assertEquals(List.of(), resolved);
+    }
+
+    /** Handlers identify the server by host name, like GeoServer's own. */
+    private static final URIHandler LOCALHOST_HANDLER = new URIHandlerImpl() {
+        @Override
+        public boolean canHandle(URI uri) {
+            return uri.host().equals("localhost");
+        }
+    };
+
+    @Test
+    public void testValidateImportsIncludesReadsLocalFilesDirectly() throws Exception {
+        File rootFile = writeRootImporting("import1.xsd");
+
+        List errors = Schemas.validateImportsIncludes(
+                rootFile.getAbsolutePath(), List.of(), List.of(), List.of(LOCALHOST_HANDLER), null);
+
+        assertEquals(List.of(), errors);
+    }
+
+    @Test
+    public void testValidateImportsIncludesResolvesLocationsWithoutHost() throws Exception {
+        List<String> resolved = new ArrayList<>();
+        EntityResolver resolver = (publicId, systemId) -> {
+            resolved.add(systemId);
+            throw new SAXException("location rejected: " + systemId);
+        };
+
+        List<String> locations = List.of("import1.xsd?version=2", "urn:ogc:schema:feature?version=2");
+        for (String location : locations) {
+            IOException exception = assertThrows(
+                    IOException.class,
+                    () -> Schemas.validateImportsIncludes(
+                            location, List.of(), List.of(), List.of(LOCALHOST_HANDLER), resolver));
+            assertEquals("Could not resolve schema location " + location, exception.getMessage());
+        }
+        assertEquals(locations, resolved);
+    }
+
+    @Test
+    public void testValidateImportsIncludesResolvesHttpHandlerLocations() throws Exception {
+        String location = "http://localhost/wfs?request=DescribeFeatureType&typeName=test:Feature";
+        EntityResolver resolver = (publicId, systemId) -> {
+            throw new SAXException("location rejected: " + systemId);
+        };
+
+        IOException exception = assertThrows(
+                IOException.class,
+                () -> Schemas.validateImportsIncludes(
+                        location, List.of(), List.of(), List.of(new HTTPURIHandler()), resolver));
+        assertEquals("Could not resolve schema location " + location, exception.getMessage());
+    }
+
+    /** Writes the root schema with a single import of the given location. */
+    private File writeRootImporting(String schemaLocation) throws IOException {
+        File rootFile = new File(tmp, "root.xsd");
+        write(
+                rootFile,
+                "<xsd:schema xmlns='http://geotools.org/test' "
+                        + "xmlns:xsd='http://www.w3.org/2001/XMLSchema' "
+                        + "targetNamespace='http://geotools.org/test'> "
+                        + "<xsd:import namespace='http://geotools.org/import1' schemaLocation='"
+                        + schemaLocation
+                        + "'/>"
+                        + "</xsd:schema>");
+        return rootFile;
     }
 }

@@ -28,12 +28,14 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import org.apache.commons.beanutils.BeanComparator;
-import org.apache.solr.client.solrj.SolrQuery;
-import org.apache.solr.client.solrj.SolrQuery.ORDER;
-import org.apache.solr.client.solrj.impl.HttpSolrClient;
+import org.apache.solr.client.solrj.impl.HttpJdkSolrClient;
+import org.apache.solr.client.solrj.impl.HttpSolrClientBase;
 import org.apache.solr.client.solrj.request.LukeRequest;
+import org.apache.solr.client.solrj.request.SolrQuery;
+import org.apache.solr.client.solrj.request.SolrQuery.ORDER;
 import org.apache.solr.client.solrj.response.LukeResponse;
 import org.apache.solr.client.solrj.response.LukeResponse.FieldInfo;
 import org.apache.solr.client.solrj.response.LukeResponse.FieldTypeInfo;
@@ -53,6 +55,7 @@ import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.feature.NameImpl;
 import org.geotools.feature.visitor.UniqueVisitor;
 import org.geotools.filter.FilterCapabilities;
+import org.geotools.filter.IllegalFilterException;
 import org.geotools.filter.visitor.SimplifyingFilterVisitor;
 import org.geotools.util.factory.Hints;
 import org.locationtech.jts.geom.Geometry;
@@ -82,7 +85,7 @@ public class SolrDataStore extends ContentDataStore {
     // Attributes configurations of the store entries
     private Map<String, SolrLayerConfiguration> solrConfigurations = new ConcurrentHashMap<>();
 
-    HttpSolrClient solrServer;
+    HttpJdkSolrClient solrServer;
 
     // feature types build using the provided indexes configuration
     private final Map<String, SimpleFeatureType> defaultFeatureTypes = new HashMap<>();
@@ -119,13 +122,12 @@ public class SolrDataStore extends ContentDataStore {
         // TODO: make connection timeouts configurable
         this.url = url;
         this.layerMapper = layerMapper;
-        this.solrServer = new HttpSolrClient.Builder()
-                .withBaseSolrUrl(url.toString())
-                .allowCompression(true)
-                .withConnectionTimeout(10000)
-                .withSocketTimeout(10000)
+        this.solrServer = new HttpJdkSolrClient.Builder(url.toString())
+                .withFollowRedirects(true)
+                .withTheseParamNamesInTheUrl(Set.of())
+                .withConnectionTimeout(10, TimeUnit.SECONDS)
+                .withRequestTimeout(10, TimeUnit.SECONDS)
                 .build();
-        this.solrServer.setFollowRedirects(true);
     }
 
     /**
@@ -339,15 +341,19 @@ public class SolrDataStore extends ContentDataStore {
             FilterToSolr f2s = initializeFilterToSolr(featureType);
             String fq = layerMapper.prepareFilterQuery(featureType);
             Filter simplified = SimplifyingFilterVisitor.simplify(q.getFilter(), featureType);
-            String ffq = f2s.encodeToString(simplified);
-            if (ffq != null && !ffq.isEmpty()) {
-                fq = fq != null ? fq + " AND " + ffq : ffq;
+            try {
+                String ffq = f2s.encodeToString(simplified);
+                if (ffq != null && !ffq.isEmpty()) {
+                    fq = fq != null ? fq + " AND " + ffq : ffq;
+                }
+                query.setFilterQueries(fq);
+
+                // Add viewpPrams
+                addViewparams(q, query);
+            } catch (IllegalFilterException e) {
+                // Solr could not support this filter, so the result is going to be inefficient client side processing
+                LOGGER.log(Level.WARNING, e.getMessage());
             }
-            query.setFilterQueries(fq);
-
-            // Add viewpPrams
-            addViewparams(q, query);
-
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, e.getMessage(), e);
         }
@@ -406,7 +412,8 @@ public class SolrDataStore extends ContentDataStore {
 
             // Add viewparams parameters
             addViewparams(q, query);
-
+        } catch (IllegalFilterException e) {
+            LOGGER.log(Level.WARNING, e.getMessage());
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, e.getMessage(), e);
         }
@@ -454,7 +461,7 @@ public class SolrDataStore extends ContentDataStore {
         }
     }
 
-    HttpSolrClient getSolrServer() {
+    HttpSolrClientBase getSolrServer() {
         return solrServer;
     }
 
@@ -462,8 +469,8 @@ public class SolrDataStore extends ContentDataStore {
     public void dispose() {
         try {
             solrServer.close();
-        } catch (IOException ex) {
-            LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         } finally {
             super.dispose();
         }

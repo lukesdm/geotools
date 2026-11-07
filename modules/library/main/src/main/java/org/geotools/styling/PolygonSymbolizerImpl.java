@@ -41,8 +41,8 @@ public class PolygonSymbolizerImpl extends AbstractSymbolizer implements Polygon
     private Expression offset;
     private DisplacementImpl disp;
 
-    private Fill fill = new FillImpl();
-    private StrokeImpl stroke = new StrokeImpl();
+    private Fill fill;
+    private StrokeImpl stroke;
 
     /** Creates a new instance of DefaultPolygonStyler */
     protected PolygonSymbolizerImpl() {
@@ -151,6 +151,7 @@ public class PolygonSymbolizerImpl extends AbstractSymbolizer implements Polygon
      * @return The deep copy clone.
      */
     @Override
+    @SuppressWarnings("PMD.UnnecessaryCast")
     public Object clone() {
         PolygonSymbolizerImpl clone;
 

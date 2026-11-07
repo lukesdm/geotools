@@ -18,34 +18,66 @@ jobs:
     runs-on: [macos-latest]
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set up JDK 17
-      uses: actions/setup-java@v5
+      uses: actions/setup-java@v6
       with:
         java-version: 17
         distribution: 'temurin'
         architecture: 'arm64'
-    - name: Build GDAL
+    - name: Install GDAL build/runtime dependencies via Homebrew
+      # Skip 'brew update' and 'brew upgrade' (which would upgrade every
+      # preinstalled formula on the runner image, ~5+ min for packages
+      # unrelated to gdal). We rely on whatever versions of proj/geos/etc.
+      # ship in the runner image; GitHub rotates the macOS image roughly
+      # every 2 weeks, which gives us fresh-enough libraries. The gdal
+      # cache key below includes ImageVersion, so any image refresh
+      # invalidates the cache and rebuilds gdal against the new bottles.
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: 1
+        HOMEBREW_NO_INSTALL_CLEANUP: 1
+        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
       run: |
-        mkdir $GDAL_INSTALL_PATH
-        brew update
-        brew upgrade
         brew install freexl libxml2 libspatialite geos proj libgeotiff openjpeg libaec postgis doxygen unixodbc aom jpeg-xl libheif libarchive libkml boost ccache swig python-setuptools
-        : # gdal is automatically installed as a dependency for postgis
-        brew uninstall --ignore-dependencies gdal
+        : # gdal is automatically installed as a dependency for postgis; remove brew's gdal so our custom build is the only one in DYLD_LIBRARY_PATH
+        brew uninstall --ignore-dependencies gdal || true
+    - name: Capture runner image identity for cache key
+      # ImageOS and ImageVersion are set in the runner's shell environment
+      # but are not exposed to the ${{ env.X }} expression context, so we
+      # surface them as step outputs to use them in the cache key below.
+      id: image
+      run: |
+        echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+        echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
+    - name: Restore GDAL build cache
+      id: gdal-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ env.GDAL_INSTALL_PATH }}
+        key: gdal-${{ env.OSX_GDAL_VERSION }}-${{ steps.image.outputs.os }}-${{ steps.image.outputs.version }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/macos.yml') }}
+    - name: Verify cached GDAL
+      id: gdal-verify
+      if: steps.gdal-cache.outputs.cache-hit == 'true'
+      continue-on-error: true
+      run: $GDAL_INSTALL_PATH/bin/gdalinfo --version
+    - name: Build GDAL
+      if: steps.gdal-cache.outputs.cache-hit != 'true' || steps.gdal-verify.outcome == 'failure'
+      run: |
+        rm -rf $GDAL_INSTALL_PATH
+        mkdir $GDAL_INSTALL_PATH
         wget https://github.com/OSGeo/gdal/releases/download/v$OSX_GDAL_VERSION/gdal-$OSX_GDAL_VERSION.tar.gz
         tar -xvf gdal-$OSX_GDAL_VERSION.tar.gz
         cd gdal-$OSX_GDAL_VERSION
         mkdir build
         cd build
-        : # See https://github.com/OSGeo/gdal/issues/6949 (Java bindings) and https://github.com/OSGeo/gdal/pull/8226 (Arrow and Parquet). Poppler is off due to build failures
-        cmake -DCMAKE_INSTALL_PREFIX=$GDAL_INSTALL_PATH -DCMAKE_BUILD_TYPE=Release -DBUILD_JAVA_BINDINGS=ON -DBUILD_PYTHON_BINDINGS=OFF -DGDAL_USE_POPPLER=OFF ${CMAKE_OPTIONS} ..
+        : # See https://github.com/OSGeo/gdal/issues/6949 (Java bindings) and https://github.com/OSGeo/gdal/pull/8226 (Arrow and Parquet). Poppler and OpenEXR are off due to build failures
+        cmake -DCMAKE_INSTALL_PREFIX=$GDAL_INSTALL_PATH -DCMAKE_BUILD_TYPE=Release -DBUILD_JAVA_BINDINGS=ON -DBUILD_PYTHON_BINDINGS=OFF -DGDAL_USE_POPPLER=OFF -DGDAL_USE_OPENEXR=OFF ${CMAKE_OPTIONS} ..
         cmake --build .
         cmake --build . --target install
         : # Sanity test that the gdal bindings actually work
-        ctest --output-on-failure -R java 
+        ctest --output-on-failure -R java
     - name: Maven repository caching
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.m2/repository
         key: gt-maven-${{ hashFiles('**/pom.xml') }}

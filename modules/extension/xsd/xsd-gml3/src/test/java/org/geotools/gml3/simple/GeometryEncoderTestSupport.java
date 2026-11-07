@@ -24,7 +24,6 @@ import java.util.Properties;
 import javax.xml.transform.OutputKeys;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerConfigurationException;
-import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMResult;
 import javax.xml.transform.sax.SAXTransformerFactory;
 import javax.xml.transform.sax.TransformerHandler;
@@ -34,6 +33,7 @@ import org.geotools.gml2.simple.GMLWriter;
 import org.geotools.gml2.simple.GeometryEncoder;
 import org.geotools.gml3.GML;
 import org.geotools.gml3.GML3TestSupport;
+import org.geotools.xml.XMLUtils;
 import org.geotools.xsd.Encoder;
 import org.junit.Before;
 import org.locationtech.jts.geom.Geometry;
@@ -76,10 +76,49 @@ public abstract class GeometryEncoderTestSupport extends GML3TestSupport {
             boolean decimalEncoding,
             boolean padWithZeros)
             throws Exception {
+        return encode(
+                encoder, geometry, encodeMeasures, gmlId, numDecimals, decimalEncoding, padWithZeros, GML.NAMESPACE);
+    }
+
+    /** Same, declaring the gml prefix against the given namespace, so a GML 3.2 document can be built too. */
+    protected <T extends Geometry> Document encode(
+            GeometryEncoder<T> encoder,
+            T geometry,
+            boolean encodeMeasures,
+            String gmlId,
+            int numDecimals,
+            boolean decimalEncoding,
+            boolean padWithZeros,
+            String namespace)
+            throws Exception {
+        return encode(
+                encoder,
+                geometry,
+                encodeMeasures,
+                gmlId,
+                numDecimals,
+                decimalEncoding,
+                padWithZeros,
+                namespace,
+                new AttributesImpl());
+    }
+
+    /** Same, with the attributes the feature collection delegate would have built for the geometry. */
+    protected <T extends Geometry> Document encode(
+            GeometryEncoder<T> encoder,
+            T geometry,
+            boolean encodeMeasures,
+            String gmlId,
+            int numDecimals,
+            boolean decimalEncoding,
+            boolean padWithZeros,
+            String namespace,
+            AttributesImpl atts)
+            throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
 
         // create the document serializer
-        SAXTransformerFactory txFactory = (SAXTransformerFactory) SAXTransformerFactory.newInstance();
+        SAXTransformerFactory txFactory = XMLUtils.newSaxTransformerFactory();
 
         TransformerHandler xmls;
         try {
@@ -96,15 +135,15 @@ public abstract class GeometryEncoderTestSupport extends GML3TestSupport {
         GMLWriter handler = new GMLWriter(
                 xmls, gtEncoder.getNamespaces(), numDecimals, decimalEncoding, padWithZeros, "gml", encodeMeasures);
         handler.startDocument();
-        handler.startPrefixMapping("gml", GML.NAMESPACE);
+        handler.startPrefixMapping("gml", namespace);
         handler.endPrefixMapping("gml");
 
-        encoder.encode(geometry, new AttributesImpl(), handler, gmlId);
+        encoder.encode(geometry, atts, handler, gmlId);
         handler.endDocument();
 
         ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
         DOMResult result = new DOMResult();
-        Transformer tx = TransformerFactory.newInstance().newTransformer();
+        Transformer tx = XMLUtils.newTransformer();
         tx.transform(new StreamSource(in), result);
         Document d = (Document) result.getNode();
         return d;

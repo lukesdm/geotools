@@ -19,6 +19,7 @@ package org.geotools.filter.expression.geojson;
 import static org.junit.Assert.assertEquals;
 
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Scanner;
 import org.geotools.api.feature.simple.SimpleFeature;
@@ -43,9 +44,11 @@ public class JSONNodePropertyAccessorTest {
     @Before
     public void setUp() throws Exception {
         URL url = TestData.url(GeoJSONReaderTest.class, "multilevel.json");
-        String jsonString =
-                new Scanner(url.openStream(), "UTF-8").useDelimiter("\\A").next();
+        String jsonString = new Scanner(url.openStream(), StandardCharsets.UTF_8)
+                .useDelimiter("\\A")
+                .next();
         feature = GeoJSONReader.parseFeature(jsonString);
+        type = feature.getType();
         accessor = JSONNodePropertyAccessorFactory.JSONNODEPROPERTY;
     }
 
@@ -54,6 +57,9 @@ public class JSONNodePropertyAccessorTest {
         // Root element is not an ObjectNode or ArrayNode
         Assert.assertFalse(accessor.canHandle(feature, "aString", null));
         Assert.assertTrue(accessor.canHandle(feature, "aThreeLevelObject/secondLevel", null));
+
+        Assert.assertFalse(accessor.canHandle(type, "aString", null));
+        Assert.assertTrue(accessor.canHandle(type, "aThreeLevelObject/secondLevel", null));
     }
 
     @Test

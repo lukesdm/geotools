@@ -179,7 +179,7 @@ public class CSVDataStoreFactory implements FileDataStoreFactorySpi {
     }
 
     @Override
-    @SuppressWarnings("ReturnValueIgnored")
+    @SuppressWarnings({"ReturnValueIgnored", "PMD.UnusedReturnValue"})
     public boolean isAvailable() {
         try {
             CSVDataStore.class.getName();

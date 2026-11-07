@@ -13,7 +13,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>unsupported</artifactId>
-    <version>35-SNAPSHOT</version>
+    <version>36-SNAPSHOT</version>
   </parent>
 
   <!-- =========================================================== -->
@@ -72,7 +72,7 @@
     </dependency>
     <dependency>
       <groupId>org.eclipse.imagen</groupId>
-      <artifactId>stats</artifactId>
+      <artifactId>imagen-stats</artifactId>
     </dependency>
     <dependency>
       <groupId>org.geotools</groupId>

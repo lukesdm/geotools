@@ -13,7 +13,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>unsupported</artifactId>
-    <version>35-SNAPSHOT</version>
+    <version>36-SNAPSHOT</version>
   </parent>
 
   <!-- =========================================================== -->
@@ -78,19 +78,19 @@
 
     <dependency>
       <groupId>org.eclipse.imagen</groupId>
-      <artifactId>contour</artifactId>
+      <artifactId>imagen-contour</artifactId>
     </dependency>
     <dependency>
       <groupId>org.eclipse.imagen</groupId>
-      <artifactId>vectorize</artifactId>
+      <artifactId>imagen-vectorize</artifactId>
     </dependency>
     <dependency>
       <groupId>org.eclipse.imagen</groupId>
-      <artifactId>jiffle-op</artifactId>
+      <artifactId>imagen-jiffle-op</artifactId>
     </dependency>
     <dependency>
       <groupId>org.eclipse.imagen</groupId>
-      <artifactId>classbreaks</artifactId>
+      <artifactId>imagen-classbreaks</artifactId>
     </dependency>
 
     <!-- Test dependencies -->
@@ -116,6 +116,13 @@
     </dependency>
     <dependency>
       <groupId>org.geotools</groupId>
+      <artifactId>gt-coverage</artifactId>
+      <version>${project.version}</version>
+      <classifier>tests</classifier>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.geotools</groupId>
       <artifactId>gt-epsg-hsql</artifactId>
       <scope>test</scope>
     </dependency>
@@ -133,6 +140,10 @@
       <groupId>org.geotools</groupId>
       <artifactId>gt-image</artifactId>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr4-runtime</artifactId>
     </dependency>
   </dependencies>
 

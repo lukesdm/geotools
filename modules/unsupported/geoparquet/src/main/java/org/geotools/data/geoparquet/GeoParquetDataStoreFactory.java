@@ -17,9 +17,13 @@
 package org.geotools.data.geoparquet;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 import org.geotools.api.data.DataAccessFactory;
+import org.geotools.api.data.DataStore;
 import org.geotools.api.data.DataStoreFactorySpi;
+import org.geotools.data.duckdb.AbstractDuckDBDataStoreFactory;
+import org.geotools.data.duckdb.ForwardingDataStoreFactory;
 import org.geotools.jdbc.JDBCDataStore;
 
 /**
@@ -56,10 +60,13 @@ public class GeoParquetDataStoreFactory extends ForwardingDataStoreFactory<GeoPa
     public static final DataAccessFactory.Param PRIMARY_KEY_ID = GeoParquetDataStoreFactoryDelegate.PRIMARY_KEY_ID;
     public static final Param FETCHSIZE = GeoParquetDataStoreFactoryDelegate.FETCHSIZE;
     public static final Param SCREENMAP = GeoParquetDataStoreFactoryDelegate.SCREENMAP;
-    public static final Param SIMPLIFY = GeoParquetDataStoreFactoryDelegate.SIMPLIFY;
     public static final Param USE_AWS_CREDENTIAL_CHAIN = GeoParquetDataStoreFactoryDelegate.USE_AWS_CREDENTIAL_CHAIN;
     public static final Param AWS_REGION = GeoParquetDataStoreFactoryDelegate.AWS_REGION;
     public static final Param AWS_PROFILE = GeoParquetDataStoreFactoryDelegate.AWS_PROFILE;
+    public static final Param ENDPOINT = GeoParquetDataStoreFactoryDelegate.ENDPOINT;
+    public static final Param URL_STYLE = GeoParquetDataStoreFactoryDelegate.URL_STYLE;
+    public static final Param MEMORY_LIMIT = GeoParquetDataStoreFactoryDelegate.MEMORY_LIMIT;
+    public static final Param THREADS = GeoParquetDataStoreFactoryDelegate.THREADS;
 
     public GeoParquetDataStoreFactory() {
         super(new GeoParquetDataStoreFactoryDelegate());
@@ -67,7 +74,19 @@ public class GeoParquetDataStoreFactory extends ForwardingDataStoreFactory<GeoPa
 
     @Override
     public GeoparquetDataStore createDataStore(Map<String, ?> params) throws IOException {
-        JDBCDataStore delegateStore = delegate.createDataStore(params);
+        JDBCDataStore delegateStore = delegate.createDataStore(withWritableDuckDb(params));
         return new GeoparquetDataStore(delegateStore);
+    }
+
+    @Override
+    public DataStore createNewDataStore(Map<String, ?> params) throws IOException {
+        JDBCDataStore delegateStore = (JDBCDataStore) delegate.createNewDataStore(withWritableDuckDb(params));
+        return new GeoparquetDataStore(delegateStore);
+    }
+
+    private Map<String, Object> withWritableDuckDb(Map<String, ?> params) {
+        Map<String, Object> writableParams = new HashMap<>(params);
+        writableParams.put(AbstractDuckDBDataStoreFactory.READ_ONLY.key, Boolean.FALSE);
+        return writableParams;
     }
 }

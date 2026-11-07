@@ -5,7 +5,7 @@
   <parent>
     <groupId>org.geotools.maven</groupId>
     <artifactId>maven</artifactId>
-    <version>35-SNAPSHOT</version>
+    <version>36-SNAPSHOT</version>
   </parent>
 
   <artifactId>gt-enforce-managed-dependencies</artifactId>
@@ -25,9 +25,8 @@
   </developers>
 
   <properties>
-    <maven.version>3.8.1</maven.version>
-    <maven-enforcer-plugin.version>3.4.1</maven-enforcer-plugin.version>
-    <plexus-utils.version>3.0.24</plexus-utils.version>
+    <maven.version>3.9.1</maven.version>
+    <maven-enforcer-plugin.version>3.7.0</maven-enforcer-plugin.version>
   </properties>
 
   <dependencies>
@@ -64,7 +63,6 @@
     <dependency>
       <groupId>org.codehaus.plexus</groupId>
       <artifactId>plexus-utils</artifactId>
-      <version>${plexus-utils.version}</version>
       <scope>provided</scope>
     </dependency>
 

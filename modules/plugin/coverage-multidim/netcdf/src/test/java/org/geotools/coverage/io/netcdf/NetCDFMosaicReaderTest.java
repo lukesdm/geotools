@@ -16,9 +16,7 @@
  */
 package org.geotools.coverage.io.netcdf;
 
-import static org.geotools.coverage.util.CoverageUtilities.loadPropertiesFromURL;
 import static org.geotools.gce.imagemosaic.Utils.FF;
-import static org.geotools.gce.imagemosaic.Utils.Prop.AUXILIARY_DATASTORE_FILE;
 import static org.geotools.gce.imagemosaic.Utils.Prop.AUXILIARY_FILE;
 import static org.geotools.util.URLs.fileToUrl;
 import static org.hamcrest.CoreMatchers.equalTo;
@@ -28,7 +26,6 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.arrayWithSize;
 import static org.hamcrest.Matchers.emptyArray;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -45,7 +42,6 @@ import java.io.File;
 import java.io.FileFilter;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -54,12 +50,10 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
-import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.JFrame;
 import junit.framework.JUnit4TestAdapter;
 import org.apache.commons.io.FileUtils;
@@ -88,16 +82,11 @@ import org.geotools.coverage.grid.io.GranuleRemovalPolicy;
 import org.geotools.coverage.grid.io.GranuleSource;
 import org.geotools.coverage.grid.io.GranuleStore;
 import org.geotools.coverage.grid.io.HarvestedSource;
-import org.geotools.data.DataUtilities;
-import org.geotools.data.DefaultRepository;
-import org.geotools.data.directory.DirectoryDataStore;
-import org.geotools.data.h2.H2DataStoreFactory;
-import org.geotools.data.shapefile.ShapefileDataStoreFactory;
-import org.geotools.data.shapefile.ShapefileDataStoreFactory.ShpFileStoreFactory;
 import org.geotools.data.simple.SimpleFeatureCollection;
 import org.geotools.data.simple.SimpleFeatureIterator;
 import org.geotools.factory.CommonFactoryFinder;
-import org.geotools.feature.NameImpl;
+import org.geotools.gce.imagemosaic.GranuleImageCache;
+import org.geotools.gce.imagemosaic.GuavaGranuleImageCache;
 import org.geotools.gce.imagemosaic.ImageMosaicFormat;
 import org.geotools.gce.imagemosaic.ImageMosaicReader;
 import org.geotools.gce.imagemosaic.Utils;
@@ -106,8 +95,6 @@ import org.geotools.geometry.GeneralBounds;
 import org.geotools.image.util.ImageUtilities;
 import org.geotools.imageio.netcdf.NetCDFImageReader;
 import org.geotools.imageio.netcdf.NetCDFImageReaderSpi;
-import org.geotools.imageio.netcdf.utilities.NetCDFUtilities;
-import org.geotools.jdbc.JDBCDataStore;
 import org.geotools.referencing.CRS;
 import org.geotools.referencing.crs.DefaultGeographicCRS;
 import org.geotools.test.TestData;
@@ -174,7 +161,7 @@ public class NetCDFMosaicReaderTest {
                 TimeAttribute=time
                 Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date
                 """;
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -269,7 +256,7 @@ public class NetCDFMosaicReaderTest {
                 TimeAttribute=time
                 Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date
                 """;
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -316,6 +303,47 @@ public class NetCDFMosaicReaderTest {
     }
 
     @Test
+    public void testCachedTimeSlicesDoNotCollide() throws Exception {
+        // polyphemus holds two time slices in a single file: same location, imageindex 0 and 1. With the granule
+        // image cache enabled, reading one slice must not serve its pixels for the other, i.e. the two slices must
+        // produce distinct cache keys even though they share a URL.
+        File nc1 = TestData.file(this, "polyphemus_20130301_test.nc");
+        File mosaic = tempFolder.newFolder("nc_cache_slices");
+        FileUtils.copyFileToDirectory(nc1, mosaic);
+
+        String indexer = "TimeAttribute=time\n"
+                + "Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date\n";
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
+        File dsp = TestData.file(this, "datastore.properties");
+        FileUtils.copyFileToDirectory(dsp, mosaic);
+
+        // cache injected as a shared pool and turned on via the read parameter
+        GranuleImageCache cache = new GuavaGranuleImageCache(64L * 1024 * 1024, 10L * 1024 * 1024);
+        ImageMosaicFormat format = new ImageMosaicFormat();
+        ImageMosaicReader reader = format.getReader(mosaic, new Hints(Hints.GRANULE_IMAGE_CACHE, cache));
+        assertNotNull(reader);
+        try {
+            ParameterValue<Boolean> cacheGranules = ImageMosaicFormat.CACHE_GRANULES.createValue();
+            cacheGranules.setValue(true);
+            ParameterValue<List> time = ImageMosaicFormat.TIME.createValue();
+            time.setValue(Arrays.asList(parseTimeStamp("2013-03-01T00:00:00.000Z")));
+            GeneralParameterValue[] params = {NO_DEFERRED_LOADING_PARAM, cacheGranules, time};
+            GridCoverage2D coverage1 = reader.read(params); // populates the cache for slice 0
+            time.setValue(Arrays.asList(parseTimeStamp("2013-03-01T01:00:00.000Z")));
+            GridCoverage2D coverage2 = reader.read(params);
+
+            Position center = reader.getOriginalEnvelope().getMedian();
+            float[] v1 = (float[]) coverage1.evaluate(center);
+            float[] v2 = (float[]) coverage2.evaluate(center);
+            // a cache-key collision would make the second read return the first slice's cached pixels
+            assertNotEquals("Time slices must not share a cache entry", v1[0], v2[0], 0f);
+            assertTrue("both slices should be cached", cache.size() >= 2);
+        } finally {
+            reader.dispose();
+        }
+    }
+
+    @Test
     public void testCustomTimeAttribute() throws IOException {
         File nc1 = TestData.file(this, "polyphemus_20130301_NO2_time2.nc");
         File mosaic = tempFolder.newFolder("nc_time2");
@@ -335,7 +363,7 @@ public class NetCDFMosaicReaderTest {
         File nc1Aux = TestData.file(this, "polyphemus_20130301_NO2_time2.xml");
         FileUtils.copyFileToDirectory(nc1Aux, auxiliaryFileDir);
 
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
         File dsp = TestData.file(this, "datastore.properties");
         FileUtils.copyFileToDirectory(dsp, mosaic);
 
@@ -346,171 +374,14 @@ public class NetCDFMosaicReaderTest {
     }
 
     @Test
-    public void testCustomTimeAttributeRepository() throws IOException {
-        File indexDirectory = new File("./target/custom_time_attribute_idx");
-
-        // setup repository
-        ShpFileStoreFactory dialect = new ShpFileStoreFactory(new ShapefileDataStoreFactory(), new HashMap<>());
-        FileUtils.deleteQuietly(indexDirectory);
-        indexDirectory.mkdir();
-        File auxiliaryDataStoreFile = new File(indexDirectory, "test.properties");
-        String theStoreName = "testStore";
-        FileUtils.writeStringToFile(auxiliaryDataStoreFile, NetCDFUtilities.STORE_NAME + "=" + theStoreName, "UTF-8");
-
-        DirectoryDataStore dataStore = new DirectoryDataStore(indexDirectory, dialect);
-
-        DefaultRepository repository = new DefaultRepository();
-        repository.register(new NameImpl(theStoreName), dataStore);
-
-        File nc1 = TestData.file(this, "polyphemus_20130301_NO2_time2.nc");
-        File mosaic = tempFolder.newFolder("nc_time2");
-        FileUtils.copyFileToDirectory(nc1, mosaic);
-
-        // The indexer
-        Properties indexer = new Properties();
-        indexer.put("TimeAttribute", "time");
-        indexer.put("Schema", "the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date");
-        indexer.put("AuxiliaryDatastoreFile", auxiliaryDataStoreFile.getCanonicalPath());
-        final String auxiliaryFilePath =
-                mosaic.getAbsolutePath() + File.separatorChar + ".polyphemus_20130301_NO2_time2";
-        final File auxiliaryFileDir = new File(auxiliaryFilePath);
-        assertTrue(auxiliaryFileDir.mkdirs());
-
-        File nc1Aux = TestData.file(this, "polyphemus_20130301_NO2_time2.xml");
-        FileUtils.copyFileToDirectory(nc1Aux, auxiliaryFileDir);
-
-        try (FileOutputStream fos = new FileOutputStream(new File(mosaic, "indexer.properties"))) {
-            indexer.store(fos, null);
-        }
-        File dsp = TestData.file(this, "datastore.properties");
-        FileUtils.copyFileToDirectory(dsp, mosaic);
-
-        ImageMosaicFormat format = new ImageMosaicFormat();
-        ImageMosaicReader reader = format.getReader(mosaic, new Hints(Hints.REPOSITORY, repository));
-        checkCustomTimeAttribute(nc1, reader);
-
-        // the index files have actually been created
-        List<String> typeNames = Arrays.asList(dataStore.getTypeNames());
-        assertEquals(1, typeNames.size());
-        assertTrue(typeNames.contains("NO2"));
-        dataStore.dispose();
-        reader.dispose();
-    }
-
-    @Test
-    public void testSharedRepository() throws IOException {
-        // setup repository
-        ShpFileStoreFactory dialect = new ShpFileStoreFactory(new ShapefileDataStoreFactory(), new HashMap<>());
-        File indexDirectory = new File("./target/repo_idx");
-        FileUtils.deleteQuietly(indexDirectory);
-        indexDirectory.mkdir();
-        File auxiliaryDataStoreFile = new File(indexDirectory, "test.properties");
-        String theStoreName = "testStore";
-        FileUtils.writeStringToFile(auxiliaryDataStoreFile, NetCDFUtilities.STORE_NAME + "=" + theStoreName, "UTF-8");
-
-        AtomicBoolean disposed = new AtomicBoolean();
-        DirectoryDataStore dataStore = new DirectoryDataStore(indexDirectory, dialect) {
-
-            @Override
-            public void dispose() {
-                super.dispose();
-                disposed.set(true);
-            }
-        };
-
-        DefaultRepository repository = new DefaultRepository();
-        repository.register(new NameImpl(theStoreName), dataStore);
-
-        File nc1 = TestData.file(this, "polyphemus_20130301_test.nc");
-        File nc2 = TestData.file(this, "polyphemus_20130302_test.nc");
-        File mosaic = tempFolder.newFolder("nc_repo");
-        FileUtils.copyFileToDirectory(nc1, mosaic);
-        FileUtils.copyFileToDirectory(nc2, mosaic);
-
-        // The indexer
-        Properties indexer = new Properties();
-        indexer.put("TimeAttribute", "time");
-        indexer.put("Schema", "the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date");
-        indexer.put("AuxiliaryDatastoreFile", auxiliaryDataStoreFile.getCanonicalPath());
-        final String auxiliaryFilePath = mosaic.getAbsolutePath() + File.separatorChar + ".polyphemus_20130301_test";
-        final File auxiliaryFileDir = new File(auxiliaryFilePath);
-        assertTrue(auxiliaryFileDir.mkdirs());
-
-        File nc1Aux = TestData.file(this, "polyphemus_test_aux.xml");
-        FileUtils.copyFileToDirectory(nc1Aux, auxiliaryFileDir);
-
-        try (FileOutputStream fos = new FileOutputStream(new File(mosaic, "indexer.properties"))) {
-            indexer.store(fos, null);
-        }
-        File dsp = TestData.file(this, "datastore.properties");
-        FileUtils.copyFileToDirectory(dsp, mosaic);
-
-        ImageMosaicFormat format = new ImageMosaicFormat();
-        ImageMosaicReader reader = format.getReader(mosaic, new Hints(Hints.REPOSITORY, repository));
-
-        final String name = "O3";
-        NetCDFImageReader imageReader = null;
-
-        assertNotNull(reader);
-        GridCoverage2D coverage = null;
-        try {
-            String[] names = reader.getGridCoverageNames();
-            assertEquals(1, names.length);
-            assertEquals(name, names[0]);
-
-            // check we can read
-            coverage = reader.read(NO_DEFERRED_LOADING_PARAMS);
-
-            // check we have the 4 granules we expect
-            GranuleSource source = reader.getGranules(name, true);
-            FilterFactory ff = CommonFactoryFinder.getFilterFactory();
-            Query q = new Query(Query.ALL);
-            q.setSortBy(ff.sort("time", SortOrder.ASCENDING));
-            SimpleFeatureCollection granules = source.getGranules(q);
-            assertEquals(4, granules.size());
-            try (SimpleFeatureIterator it = granules.features()) {
-                assertTrue(it.hasNext());
-                SimpleFeature f = it.next();
-                assertEquals("polyphemus_20130301_test.nc", f.getAttribute("location"));
-            }
-        } finally {
-            disposeCoverage(coverage);
-
-            disposeReader(reader);
-            disposeImageReader(imageReader);
-        }
-
-        // the index files have actually been created
-        List<String> typeNames = Arrays.asList(dataStore.getTypeNames());
-        assertFalse(disposed.get());
-        assertEquals(1, typeNames.size());
-        assertTrue(typeNames.contains(name));
-        dataStore.dispose();
-        assertTrue(disposed.get());
-    }
-
-    @Test
     public void testPurgeMetadata() throws IOException {
-        File indexDirectory = new File("./target/repo_idx_purge_metadata");
-
-        // setup repository
-        ShpFileStoreFactory dialect = new ShpFileStoreFactory(new ShapefileDataStoreFactory(), new HashMap<>());
-        FileUtils.deleteQuietly(indexDirectory);
-        indexDirectory.mkdir();
-        File auxiliaryDataStoreFile = new File(indexDirectory, "test.properties");
-        String theStoreName = "testStore";
-        FileUtils.writeStringToFile(auxiliaryDataStoreFile, NetCDFUtilities.STORE_NAME + "=" + theStoreName, "UTF-8");
-
-        DirectoryDataStore dataStore = new DirectoryDataStore(indexDirectory, dialect);
-
-        ImageMosaicReader reader = setupPolyphemusTwoFiles(auxiliaryDataStoreFile, theStoreName, dataStore);
+        ImageMosaicReader reader = setupPolyphemusTwoFiles();
         String coverageName = "O3";
         GridCoverage2D coverage = null;
         try {
             GranuleStore o3 = (GranuleStore) reader.getGranules(coverageName, false);
 
             // check the granules count and the metadata entries count before removal
-            assertEquals(4, dataStore.getFeatureSource(coverageName).getCount(Query.ALL));
             assertEquals(4, o3.getCount(Query.ALL));
 
             // remove
@@ -518,7 +389,6 @@ public class NetCDFMosaicReaderTest {
 
             // all metadata was removed
             assertTrue(o3.getGranules(Query.ALL).isEmpty());
-            assertEquals(0, dataStore.getFeatureSource(coverageName).getCount(Query.ALL));
 
             // but the files are still there
             File mosaicDirectory = (File) reader.getSource();
@@ -533,24 +403,15 @@ public class NetCDFMosaicReaderTest {
     public void testPurgeAll() throws IOException {
         File indexDirectory = new File("./target/repo_idx_purge_all");
 
-        // setup repository
-        ShpFileStoreFactory dialect = new ShpFileStoreFactory(new ShapefileDataStoreFactory(), new HashMap<>());
         FileUtils.deleteQuietly(indexDirectory);
         indexDirectory.mkdir();
-        File auxiliaryDataStoreFile = new File(indexDirectory, "test.properties");
-        String theStoreName = "testStore";
-        FileUtils.writeStringToFile(auxiliaryDataStoreFile, NetCDFUtilities.STORE_NAME + "=" + theStoreName, "UTF-8");
-
-        DirectoryDataStore dataStore = new DirectoryDataStore(indexDirectory, dialect);
-
-        ImageMosaicReader reader = setupPolyphemusTwoFiles(auxiliaryDataStoreFile, theStoreName, dataStore);
+        ImageMosaicReader reader = setupPolyphemusTwoFiles();
         String coverageName = "O3";
         GridCoverage2D coverage = null;
         try {
             GranuleStore o3 = (GranuleStore) reader.getGranules(coverageName, false);
 
             // check the granules count and the metadata entries count before removal
-            assertEquals(4, dataStore.getFeatureSource(coverageName).getCount(Query.ALL));
             assertEquals(4, o3.getCount(Query.ALL));
 
             // remove
@@ -558,7 +419,6 @@ public class NetCDFMosaicReaderTest {
 
             // everything was removed
             assertTrue(o3.getGranules(Query.ALL).isEmpty());
-            assertEquals(0, dataStore.getFeatureSource(coverageName).getCount(Query.ALL));
 
             // that includes the netcdf files, all means all
             File mosaicDirectory = (File) reader.getSource();
@@ -570,9 +430,7 @@ public class NetCDFMosaicReaderTest {
     }
 
     private ImageMosaicReader setupPolyphemusTwoFiles(
-            File auxiliaryDataStoreFile, String theStoreName, DirectoryDataStore dataStore) throws IOException {
-        DefaultRepository repository = new DefaultRepository();
-        repository.register(new NameImpl(theStoreName), dataStore);
+            /*File auxiliaryDataStoreFile, String theStoreName, DirectoryDataStore dataStore*/ ) throws IOException {
 
         File nc1 = TestData.file(this, "polyphemus_20130301_test.nc");
         File nc2 = TestData.file(this, "polyphemus_20130302_test.nc");
@@ -584,7 +442,6 @@ public class NetCDFMosaicReaderTest {
         Properties indexer = new Properties();
         indexer.put("TimeAttribute", "time");
         indexer.put("Schema", "the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date");
-        indexer.put("AuxiliaryDatastoreFile", auxiliaryDataStoreFile.getCanonicalPath());
         final String auxiliaryFilePath = mosaic.getAbsolutePath() + File.separatorChar + ".polyphemus_20130301_test";
         final File auxiliaryFileDir = new File(auxiliaryFilePath);
         assertTrue(auxiliaryFileDir.mkdirs());
@@ -599,7 +456,7 @@ public class NetCDFMosaicReaderTest {
         FileUtils.copyFileToDirectory(dsp, mosaic);
 
         ImageMosaicFormat format = new ImageMosaicFormat();
-        ImageMosaicReader reader = format.getReader(mosaic, new Hints(Hints.REPOSITORY, repository));
+        ImageMosaicReader reader = format.getReader(mosaic, null);
         assertNotNull(reader);
         return reader;
     }
@@ -628,73 +485,6 @@ public class NetCDFMosaicReaderTest {
                 // Ignore exception on dispose
             }
         }
-    }
-
-    @Test
-    public void testHarvestWithSharedRepository() throws IOException {
-        // setup repository
-        ShpFileStoreFactory dialect = new ShpFileStoreFactory(new ShapefileDataStoreFactory(), new HashMap<>());
-        File indexDirectory = new File("./target/repo2_idx");
-        FileUtils.deleteQuietly(indexDirectory);
-        indexDirectory.mkdir();
-        File auxiliaryDataStoreFile = new File(indexDirectory, "test.properties");
-        String theStoreName = "testStore";
-        FileUtils.writeStringToFile(auxiliaryDataStoreFile, NetCDFUtilities.STORE_NAME + "=" + theStoreName, "UTF-8");
-
-        DirectoryDataStore dataStore = new DirectoryDataStore(indexDirectory, dialect);
-        DefaultRepository repository = new DefaultRepository();
-        repository.register(new NameImpl(theStoreName), dataStore);
-
-        File nc1 = TestData.file(this, "polyphemus_20130301_test.nc");
-        File mosaic = tempFolder.newFolder("nc_repo");
-        FileUtils.copyFileToDirectory(nc1, mosaic);
-
-        // The indexer
-        Properties indexer = new Properties();
-        indexer.put("TimeAttribute", "time");
-        indexer.put("Schema", "the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date");
-        indexer.put("AuxiliaryDatastoreFile", auxiliaryDataStoreFile.getCanonicalPath());
-        final String auxiliaryFilePath = mosaic.getAbsolutePath() + File.separatorChar + ".polyphemus_20130301_test";
-        final File auxiliaryFileDir = new File(auxiliaryFilePath);
-        assertTrue(auxiliaryFileDir.mkdirs());
-
-        File nc1Aux = TestData.file(this, "polyphemus_test_aux.xml");
-        FileUtils.copyFileToDirectory(nc1Aux, auxiliaryFileDir);
-
-        try (FileOutputStream fos = new FileOutputStream(new File(mosaic, "indexer.properties"))) {
-            indexer.store(fos, null);
-        }
-        File dsp = TestData.file(this, "datastore.properties");
-        FileUtils.copyFileToDirectory(dsp, mosaic);
-
-        ImageMosaicFormat format = new ImageMosaicFormat();
-        ImageMosaicReader reader = format.getReader(mosaic, new Hints(Hints.REPOSITORY, repository));
-
-        final String name = "O3";
-        NetCDFImageReader imageReader = null;
-        assertNotNull(reader);
-        try {
-
-            GranuleSource source = reader.getGranules(name, true);
-            FilterFactory ff = CommonFactoryFinder.getFilterFactory();
-            Query q = new Query(Query.ALL);
-            q.setSortBy(ff.sort("time", SortOrder.ASCENDING));
-            SimpleFeatureCollection granules = source.getGranules(q);
-            assertEquals(2, granules.size());
-            try (SimpleFeatureIterator it = granules.features()) {
-                assertTrue(it.hasNext());
-                SimpleFeature f = it.next();
-                assertEquals("polyphemus_20130301_test.nc", f.getAttribute("location"));
-
-                // now add another netcdf and harvest it
-                testHarvest(reader, mosaic, source, q);
-            }
-        } finally {
-            disposeReader(reader);
-            disposeImageReader(imageReader);
-        }
-
-        dataStore.dispose();
     }
 
     public void checkCustomTimeAttribute(File nc1, ImageMosaicReader reader) throws IOException {
@@ -753,7 +543,7 @@ public class NetCDFMosaicReaderTest {
                 TimeAttribute=time
                 Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date
                 """;
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -863,7 +653,7 @@ public class NetCDFMosaicReaderTest {
                 """;
         //  + "PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)\n";
         indexer += AUXILIARY_FILE + "=" + "hdf5Coverage2D.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // simply test if the mosaic can be read without exceptions
         ImageMosaicFormat format = new ImageMosaicFormat();
@@ -885,7 +675,7 @@ public class NetCDFMosaicReaderTest {
                 TimeAttribute=time
                 Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date
                 """;
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -977,10 +767,10 @@ public class NetCDFMosaicReaderTest {
                 PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)
                 """;
         indexer += AUXILIARY_FILE + "=" + "GOME2.NO2_new.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1048,10 +838,10 @@ public class NetCDFMosaicReaderTest {
                 PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)
                 """;
         indexer += AUXILIARY_FILE + "=" + "GOME2.NO2.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1146,10 +936,10 @@ public class NetCDFMosaicReaderTest {
                 PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)
                 """;
         indexer += AUXILIARY_FILE + "=" + "GOME2.NO2.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1245,10 +1035,10 @@ public class NetCDFMosaicReaderTest {
 
         // Setting RelativePath behavior
         indexer += Prop.ABSOLUTE_PATH + "=" + "false";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1302,7 +1092,7 @@ public class NetCDFMosaicReaderTest {
                 Schema=the_geom:Polygon,location:String,imageindex:Integer,time:java.util.Date
                 """;
         indexer += AUXILIARY_FILE + "=" + "O3-NO2.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1317,7 +1107,7 @@ public class NetCDFMosaicReaderTest {
             assertEquals(2, reader.getGridCoverageNames().length);
 
             File[] files = mosaic.listFiles();
-            assertEquals(15, files.length);
+            assertEquals(12, files.length);
 
             reader.dispose();
             reader = format.getReader(mosaic);
@@ -1356,10 +1146,10 @@ public class NetCDFMosaicReaderTest {
                 PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)
                 """;
         indexer += AUXILIARY_FILE + "=" + "DUMMYGOME2.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1428,10 +1218,10 @@ public class NetCDFMosaicReaderTest {
                 PropertyCollectors=TimestampFileNameExtractorSPI[timeregex](time)
                 """;
         indexer += AUXILIARY_FILE + "=" + "DUMMYGOME2.xml";
-        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "indexer.properties"), indexer, StandardCharsets.UTF_8);
 
         String timeregex = "regex=[0-9]{8}";
-        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, "UTF-8");
+        FileUtils.writeStringToFile(new File(mosaic, "timeregex.properties"), timeregex, StandardCharsets.UTF_8);
 
         // the datastore.properties file is also mandatory...
         File dsp = TestData.file(this, "datastore.properties");
@@ -1699,71 +1489,6 @@ public class NetCDFMosaicReaderTest {
                 reader.dispose();
             }
         }
-
-        // check that the NetCDF database has been cleaned too
-        Properties props = new Properties();
-        try (FileReader fr = new FileReader(new File(testDir, "netcdf_datastore.properties"), StandardCharsets.UTF_8)) {
-            props.load(fr);
-        }
-        JDBCDataStore store = new H2DataStoreFactory().createDataStore(DataUtilities.toConnectionParameters(props));
-        assertEquals(
-                0, store.getFeatureSource("NO2").getFeatures(locationFilter).size());
-        assertEquals(0, store.getFeatureSource("O3").getFeatures(locationFilter).size());
-    }
-
-    @Test
-    public void testAuxiliaryFileRelativeReference() throws Exception {
-        String folder = "poliaux-relative";
-        File testDir = tempFolder.newFolder(folder);
-        FileUtils.copyDirectory(TestData.file(this, "poliaux"), testDir);
-
-        // create and perform checks in original directory
-        ImageMosaicReader reader = null;
-        try {
-            reader = new ImageMosaicReader(fileToUrl(testDir));
-            assertNotNull(reader);
-
-            // force full init and creation of all config files
-            reader.read("NO2", NO_DEFERRED_LOADING_PARAMS).dispose(true);
-            reader.read("O3", NO_DEFERRED_LOADING_PARAMS).dispose(true);
-
-            // check that the per store property files use relative references
-            Properties no2 = loadPropertiesFromURL(fileToUrl(new File(testDir, "NO2.properties")));
-            assertEquals("_polyphemus.xml", no2.getProperty(AUXILIARY_FILE));
-            assertEquals("netcdf_datastore.properties", no2.getProperty(AUXILIARY_DATASTORE_FILE));
-
-            Properties o3 = loadPropertiesFromURL(fileToUrl(new File(testDir, "O3.properties")));
-            assertEquals("_polyphemus.xml", o3.getProperty(AUXILIARY_FILE));
-            assertEquals("netcdf_datastore.properties", o3.getProperty(AUXILIARY_DATASTORE_FILE));
-        } finally {
-            if (reader != null) {
-                reader.dispose();
-            }
-        }
-
-        // copy the folder, make sure the reader works there too
-        File testDir2 = tempFolder.newFolder(folder + "2");
-        FileUtils.copyDirectory(testDir, testDir2);
-        try {
-            reader = new ImageMosaicReader(fileToUrl(testDir2));
-            assertNotNull(reader);
-
-            // check reads are still working as expected (no exceptions, there is actual data)
-            float[] pixel = new float[1];
-            GridCoverage2D no2 = reader.read("NO2", NO_DEFERRED_LOADING_PARAMS);
-            no2.evaluate(new Point2D.Double(12, 47), pixel);
-            assertEquals(0.92, pixel[0], 0.01);
-            no2.dispose(true);
-
-            GridCoverage2D o3 = reader.read("O3", NO_DEFERRED_LOADING_PARAMS);
-            o3.evaluate(new Point2D.Double(12, 47), pixel);
-            assertEquals(56.25, pixel[0], 0.01);
-            o3.dispose(true);
-        } finally {
-            if (reader != null) {
-                reader.dispose();
-            }
-        }
     }
 
     /** Cleanup granules metadata, fully */
@@ -1815,16 +1540,6 @@ public class NetCDFMosaicReaderTest {
                 reader.dispose();
             }
         }
-
-        // check that the NetCDF database has been cleaned too
-        Properties props = new Properties();
-        try (FileReader fr = new FileReader(new File(testDir, "netcdf_datastore.properties"), StandardCharsets.UTF_8)) {
-            props.load(fr);
-        }
-        JDBCDataStore store = new H2DataStoreFactory().createDataStore(DataUtilities.toConnectionParameters(props));
-        assertEquals(
-                0, store.getFeatureSource("NO2").getFeatures(locationFilter).size());
-        assertEquals(0, store.getFeatureSource("O3").getFeatures(locationFilter).size());
     }
 
     @Test

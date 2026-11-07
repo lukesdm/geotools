@@ -23,7 +23,6 @@ Features
 - **Partition Depth Control**: Configure how many levels of partitioning to use with the `max_hive_depth` parameter
 - **Spatial Queries**: Full support for spatial filters (intersects, contains, within, etc.)
 - **Attribute Filters**: Filter data based on attribute values
-- **Geometry Simplification**: Supports on-the-fly geometry simplification for rendering optimization
 - **GeoParquet Metadata**: Parses and utilizes the GeoParquet 'geo' metadata for schema information and optimizations
 - **Precise Geometry Types**: Extracts and uses specific geometry types (Point, LineString, etc.) from GeoParquet metadata
 - **Projection Support**: Handles coordinate reference systems properly
@@ -35,14 +34,16 @@ Features
 How It Works
 ------------
 
-Under the hood, this DataStore uses `DuckDB <https://duckdb.org/>`_ and its Spatial and Parquet extensions to provide high-performance access to GeoParquet files. DuckDB is an embedded analytical database that excels at reading and processing Parquet files. The implementation:
+Under the hood, this DataStore uses `DuckDB <https://duckdb.org/>`_ and its Spatial and Parquet extensions through the shared ``gt-duckdb`` module. DuckDB is an embedded analytical database that excels at reading and processing Parquet files. The implementation:
 
-1. Creates SQL views over GeoParquet files (local or remote)
+1. Uses the shared DuckDB integration provided by ``gt-duckdb``
 2. Detects and manages Hive-partitioned datasets (directory structures with key=value patterns)
 3. Handles GeoParquet metadata parsing and schema detection
 4. Translates GeoTools filters to optimized SQL queries
 5. Converts spatial operations to DuckDB spatial functions
-6. Manages extension loading (spatial, parquet, httpfs)
+6. Manages the required DuckDB initialization internally through GeoTools
+
+The DuckDB execution layer is managed inside GeoTools. Public use of the generic DuckDB store is guarded by the GeoTools-side execution wrapper; GeoParquet uses the same shared infrastructure for its internal managed execution path.
 
 This implementation detail is abstracted away from the user, providing a clean GeoTools DataStore interface.
 
@@ -130,6 +131,10 @@ Remote GeoParquet File (S3)
    // Optional: use a specific AWS profile
    params.put("aws_profile", "my_profile");
 
+   // Optional: connect to an S3-compatible endpoint and force path-style URLs
+   params.put("endpoint", "http://minio.local:9000");
+   params.put("url_style", "path");
+
    DataStore store = DataStoreFinder.getDataStore(params);
 
 This approach automatically discovers credentials from:
@@ -168,7 +173,8 @@ Parameter                     Type     Required  Description
 **use_aws_credential_chain**  Boolean  No        Use AWS SDK credential chain for S3 authentication (default: ``false``)
 **aws_region**                String   No        AWS region for S3 access (e.g., ``us-east-1``, ``eu-west-1``). Overrides region from credential chain.
 **aws_profile**               String   No        AWS profile name to load credentials from ``~/.aws/credentials``. Requires ``use_aws_credential_chain=true``.
-**simplify**                  Boolean  No        Enable geometry simplification for rendering optimization (default: ``true``)
+**endpoint**                  String   No        DuckDB S3 endpoint for S3-compatible services such as MinIO.
+**url_style**                 String   No        DuckDB S3 URL style; use ``path`` for path-style access.
 **namespace**                 String   No        Namespace URI to use for features
 ============================= ======== ========= ===========================================================
 
@@ -188,6 +194,8 @@ Optionally specify:
 
 - ``aws_region`` to override the region
 - ``aws_profile`` to use a specific profile from ``~/.aws/credentials``
+- ``endpoint`` to target S3-compatible services
+- ``url_style=path`` when the endpoint requires path-style access
 
 **Legacy Approach: URI Query Parameters (Deprecated)**
 
@@ -218,6 +226,13 @@ The implementation parses the ``geo`` metadata field from Parquet files to obtai
 - CRS information using PROJJSON (v0.7 schema) format
 - Bounding box information
 - Additional metadata fields
+
+Implementation Notes
+--------------------
+
+- GeoParquet depends on the shared ``gt-duckdb`` module for DuckDB connectivity and SQL dialect support
+- Required DuckDB initialization is managed internally by GeoTools
+- For remote files, the ``httpfs`` extension handles HTTP(S) and S3 communication
 
 Geometry Type Handling
 ----------------------

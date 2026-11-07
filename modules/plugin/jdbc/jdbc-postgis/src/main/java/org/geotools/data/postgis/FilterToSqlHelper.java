@@ -708,7 +708,6 @@ class FilterToSqlHelper {
 
             if (needCast) out.write('(');
             json.accept(delegate, null);
-            out.write(" ::json ");
             String strPointer = literal.getValue().toString();
             List<String> pointerEl =
                     Stream.of(strPointer.split("/")).filter(p -> !p.equals("")).collect(Collectors.toList());
@@ -801,7 +800,8 @@ class FilterToSqlHelper {
         } else if (value instanceof Double double1) {
             return "(@.%s == %f)".formatted(jsonPath[lastIndex], double1);
         }
-        return "(@.%s == \"%s\")".formatted(jsonPath[lastIndex], value);
+        String literal = escapeJsonLiteral(String.valueOf(value));
+        return "(@.%s == \"%s\")".formatted(jsonPath[lastIndex], literal);
     }
 
     private String constructPath(String[] jsonPath) {

@@ -31,6 +31,7 @@ import java.awt.image.SampleModel;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -43,7 +44,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.apache.commons.io.FileUtils;
@@ -955,7 +955,7 @@ public class RasterManager implements Cloneable {
             };
             alternativeCRSCache = CacheBuilder.newBuilder()
                     .maximumSize(ALTERNATIVE_CRS_CACHE_SIZE)
-                    .expireAfterWrite(ALTERNATIVE_CRS_CACHE_EXPIRATION_SECONDS, TimeUnit.SECONDS)
+                    .expireAfterWrite(Duration.ofSeconds(ALTERNATIVE_CRS_CACHE_EXPIRATION_SECONDS))
                     .build(loader);
         }
     }
@@ -963,16 +963,12 @@ public class RasterManager implements Cloneable {
     private void updateHints(Hints hints, MosaicConfigurationBean configuration, ImageMosaicReader parentReader) {
         if (configuration != null) {
             String auxiliaryFilePath = configuration.getAuxiliaryFilePath();
-            String auxiliaryDatastorePath = configuration.getAuxiliaryDatastorePath();
             boolean update = false;
             if (auxiliaryFilePath != null) {
                 hints.add(new RenderingHints(Utils.AUXILIARY_FILES_PATH, auxiliaryFilePath));
                 update = true;
             }
-            if (auxiliaryDatastorePath != null) {
-                hints.add(new RenderingHints(Utils.AUXILIARY_DATASTORE_PATH, auxiliaryDatastorePath));
-                update = true;
-            }
+
             if (update && !hints.containsKey(Utils.PARENT_DIR)) {
                 String parentDir = null;
                 if (parentReader.parentDirectory != null) {
@@ -1834,7 +1830,7 @@ public class RasterManager implements Cloneable {
         Query query = new Query(typeName);
         SimpleFeatureCollection granules = getGranuleCatalog().getGranules(query);
         File pamDatasetFile = getPamDatasetFile(configuration);
-        RATCollectorListener ratCollector = new RATCollectorListener(pamDatasetFile);
+        RATCollectorListener ratCollector = new RATCollectorListener(pamDatasetFile, configuration.getRatGeometries());
         GranuleDescriptor.PathResolver pathResolver = new GranuleDescriptor.PathResolver(pathType, getParentLocation());
         try (SimpleFeatureIterator it = granules.features()) {
             while (it.hasNext()) {

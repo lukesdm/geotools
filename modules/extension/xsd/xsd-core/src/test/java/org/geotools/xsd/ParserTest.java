@@ -29,6 +29,8 @@ import javax.xml.namespace.QName;
 import org.geotools.ml.MLConfiguration;
 import org.geotools.ml.Mail;
 import org.geotools.ml.bindings.MLSchemaLocationResolver;
+import org.geotools.util.EntityResolver3;
+import org.geotools.util.NullEntityResolver;
 import org.geotools.xsd.impl.Handler;
 import org.junit.Assert;
 import org.junit.Test;
@@ -85,6 +87,7 @@ public class ParserTest {
     public void testParseValid() throws Exception {
         Parser parser = new Parser(new MLConfiguration());
         parser.setValidating(true);
+        parser.setEntityResolver(NullEntityResolver.INSTANCE);
         parser.parse(MLSchemaLocationResolver.class.getResourceAsStream("mails.xml"));
 
         Assert.assertEquals(0, parser.getValidationErrors().size());
@@ -94,6 +97,7 @@ public class ParserTest {
     public void testParseNull() throws Exception {
         Parser parser = new Parser(new MLConfiguration());
         parser.setValidating(true);
+        parser.setEntityResolver(NullEntityResolver.INSTANCE);
         List mails = (List) parser.parse(MLSchemaLocationResolver.class.getResourceAsStream("null-mail.xml"));
 
         Assert.assertEquals(0, parser.getValidationErrors().size());
@@ -107,6 +111,7 @@ public class ParserTest {
     public void testParseInValid() throws Exception {
         Parser parser = new Parser(new MLConfiguration());
         parser.setValidating(true);
+        parser.setEntityResolver(NullEntityResolver.INSTANCE);
         parser.parse(MLSchemaLocationResolver.class.getResourceAsStream("mails-invalid.xml"));
 
         Assert.assertNotEquals(0, parser.getValidationErrors().size());
@@ -123,6 +128,8 @@ public class ParserTest {
     @Test
     public void testValidate() throws Exception {
         Parser parser = new Parser(new MLConfiguration());
+        parser.setEntityResolver(NullEntityResolver.INSTANCE);
+
         parser.validate(MLSchemaLocationResolver.class.getResourceAsStream("mails-invalid.xml"));
 
         Assert.assertNotEquals(0, parser.getValidationErrors().size());
@@ -241,9 +248,8 @@ public class ParserTest {
                 parser.setHandleMixedContent(true);
             }
         };
-
         Parser p = new Parser(cfg);
-
+        p.setEntityResolver(NullEntityResolver.INSTANCE);
         p.parse(getClass().getResourceAsStream("mixed1.xml"));
         Assert.assertEquals("Hello 'there' how are 'you'?", sb.toString());
 
@@ -289,7 +295,8 @@ public class ParserTest {
     @Test
     public void testParseWithEntityResolver() throws Exception {
         Parser parser = new Parser(new MLConfiguration());
-
+        parser.setEntityResolver(NullEntityResolver.INSTANCE);
+        parser.setAllowDTD(true);
         try {
             parser.parse(MLSchemaLocationResolver.class.getResourceAsStream("mails-external-entities.xml"));
             Assert.fail("parsing should throw an exception since referenced file does not exist");
@@ -304,7 +311,12 @@ public class ParserTest {
         // Set an EntityResolver implementation to prevent usage of external entities.
         // When parsing an XML entity, the empty InputSource returned by this resolver provokes
         // a java.net.MalformedURLException
-        parser.setEntityResolver(new EntityResolver2() {
+        parser.setEntityResolver(new EntityResolver3() {
+            @Override
+            public String getAccess() {
+                return "all";
+            }
+
             @Override
             public InputSource resolveEntity(String publicId, String systemId) throws SAXException, IOException {
                 return new InputSource();
@@ -334,7 +346,12 @@ public class ParserTest {
         }
 
         // Set another EntityResolver
-        parser.setEntityResolver(new EntityResolver2() {
+        parser.setEntityResolver(new EntityResolver3() {
+            @Override
+            public String getAccess() {
+                return "all";
+            }
+
             @Override
             public InputSource resolveEntity(String publicId, String systemId) throws SAXException, IOException {
                 if ("file:///this/file/does/not/exist".equals(systemId)) {
@@ -346,7 +363,6 @@ public class ParserTest {
 
             @Override
             public InputSource getExternalSubset(String name, String baseURI) throws SAXException, IOException {
-                // TODO Auto-generated method stub
                 return null;
             }
 
@@ -394,7 +410,9 @@ public class ParserTest {
         };
 
         Parser p = new Parser(cfg);
+        p.setEntityResolver(NullEntityResolver.INSTANCE);
         p.setEntityExpansionLimit(1);
+        p.setAllowDTD(true);
         SAXParseException expected = null;
         try {
             p.parse(getClass().getResourceAsStream("entityExpansionLimit.xml"));
@@ -434,7 +452,9 @@ public class ParserTest {
         };
 
         Parser p = new Parser(cfg);
+        p.setEntityResolver(NullEntityResolver.INSTANCE);
         p.setEntityExpansionLimit(100);
+        p.setAllowDTD(true);
         SAXParseException unexpected = null;
         try {
             p.parse(getClass().getResourceAsStream("entityExpansionLimit.xml"));

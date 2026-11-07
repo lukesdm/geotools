@@ -56,8 +56,8 @@ import javax.xml.parsers.SAXParser;
 import org.geotools.metadata.i18n.ErrorKeys;
 import org.geotools.util.Arguments;
 import org.geotools.util.Classes;
+import org.geotools.util.DefaultEntityResolver;
 import org.geotools.util.NullEntityResolver;
-import org.geotools.util.PreventLocalEntityResolver;
 import org.geotools.util.Utilities;
 import org.geotools.util.Version;
 import org.geotools.util.logging.DefaultLoggerFactory;
@@ -747,6 +747,7 @@ public final class GeoTools {
      * @see #getDefaultHints
      */
     public static void init() {
+        Hints.scanSystemProperties();
         if (Logging.ALL.getLoggerFactory() == null) {
             final String[] CANDIDATES = {
                 "org.geotools.util.logging.LogbackLoggerFactory",
@@ -882,7 +883,11 @@ public final class GeoTools {
         return Hints.getDefaults(false);
     }
 
-    /** Used to combine provided hints with global GeoTools defaults. */
+    /**
+     * Used to combine provided hints with global GeoTools defaults.
+     *
+     * @return A copy of the GeoTools default hints, with provided Hints added.
+     */
     public static Hints addDefaultHints(final Hints hints) {
         final Hints completed = getDefaultHints();
         if (hints != null) {
@@ -891,6 +896,14 @@ public final class GeoTools {
         return completed;
     }
 
+    /**
+     * Returns the default entity resolver, used to configure {@link SAXParser}.
+     *
+     * @return An entity resolver (never {@code null})
+     */
+    public static EntityResolver getEntityResolver() {
+        return getEntityResolver(null);
+    }
     /**
      * Returns the default entity resolver, used to configure {@link SAXParser}.
      *
@@ -908,10 +921,10 @@ public final class GeoTools {
             } else if (hint instanceof EntityResolver resolver) {
                 return resolver;
             } else if (hint instanceof String className) {
-                return instantiate(className, EntityResolver.class, PreventLocalEntityResolver.INSTANCE);
+                return instantiate(className, EntityResolver.class, DefaultEntityResolver.INSTANCE);
             }
         }
-        return PreventLocalEntityResolver.INSTANCE;
+        return DefaultEntityResolver.INSTANCE;
     }
 
     /**
@@ -919,8 +932,8 @@ public final class GeoTools {
      *
      * @param className Class name to instantiate
      * @param type Class of object created
-     * @param defaultValue Default to be provided, may be null
-     * @return EntityResolver, defaults to {@link PreventLocalEntityResolver#INSTANCE} if unavailable.
+     * @param defaultValue Default to be provided, may be {@code null}
+     * @return EntityResolver, uses {@code defaultValue} if className is {@code }null}, or if instantiation fails.
      */
     static <T, D extends T> T instantiate(String className, Class<T> type, D defaultValue) {
         if (className == null) {
@@ -1183,10 +1196,34 @@ public final class GeoTools {
      * Adds the specified listener to the list of objects to inform when system-wide configuration changed.
      *
      * @param listener The listener to add.
+     * @deprecated Use {@link #addConfigurationListener(FactoryChangeListener)} instead, which provdes details of
+     *     configuration change to listeners.
      */
+    @Deprecated
     public static void addChangeListener(final ChangeListener listener) {
         removeChangeListener(listener); // Ensure singleton.
         LISTENERS.add(ChangeListener.class, listener);
+    }
+    /**
+     * Adds the specified listener to the list of objects to inform when system-wide configuration changed.
+     *
+     * @param listener The listener to add.
+     */
+    public static void addConfigurationListener(final FactoryChangeListener listener) {
+        removeChangeListener(listener); // Ensure singleton.
+        LISTENERS.add(FactoryChangeListener.class, listener);
+    }
+
+    /**
+     * Removes the specified listener from the list of objects to inform when system-wide configuration changed.
+     *
+     * @param listener The listener to remove.
+     * @deprecated Use {@link #removeConfigurationListener(FactoryChangeListener)} instead, which provdes details of
+     *     configuration change to listeners.
+     */
+    @Deprecated
+    public static void removeChangeListener(final ChangeListener listener) {
+        LISTENERS.remove(ChangeListener.class, listener);
     }
 
     /**
@@ -1194,18 +1231,37 @@ public final class GeoTools {
      *
      * @param listener The listener to remove.
      */
-    public static void removeChangeListener(final ChangeListener listener) {
-        LISTENERS.remove(ChangeListener.class, listener);
+    public static void removeChangeListener(final FactoryChangeListener listener) {
+        LISTENERS.remove(FactoryChangeListener.class, listener);
     }
 
-    /** Informs every listeners that system-wide configuration changed. */
+    /** Informs every listener of a system-wide configuration changed. */
     public static void fireConfigurationChanged() {
-        final ChangeEvent event = new ChangeEvent(GeoTools.class);
+        fireConfigurationChanged(null);
+    }
+
+    /** Informs every listener of a system-wide configuration changed. */
+    public static void fireConfigurationChanged(Map<RenderingHints.Key, Object> hints) {
+        final ChangeEvent changeEvent = new javax.swing.event.ChangeEvent(GeoTools.class);
+        final FactoryConfigurationEvent configEvent = new FactoryConfigurationEvent(GeoTools.class, hints);
+
         final Object[] listeners = LISTENERS.getListenerList();
+        RuntimeException problem = null;
         for (int i = 0; i < listeners.length; i += 2) {
-            if (listeners[i] == ChangeListener.class) {
-                ((ChangeListener) listeners[i + 1]).stateChanged(event);
+            try {
+                if (listeners[i] == ChangeListener.class) {
+                    ((ChangeListener) listeners[i + 1]).stateChanged(changeEvent);
+                } else if (listeners[i] == FactoryChangeListener.class) {
+                    ((FactoryChangeListener) listeners[i + 1]).configurationChanged(configEvent);
+                }
+            } catch (RuntimeException unexpected) {
+                if (problem == null) problem = unexpected;
+            } catch (Throwable e) {
+                if (problem == null) problem = new RuntimeException(e);
             }
+        }
+        if (problem != null) {
+            throw problem;
         }
     }
 

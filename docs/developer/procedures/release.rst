@@ -109,19 +109,19 @@ When creating the first release candidate of a series, there are some extra step
 * Commit the changes and push to the main branch on GitHub::
 
     git commit -am "Update version to 28-SNAPSHOT"
-    git push geotools main
+    git push upstream main
       
-* Create the new release candidate version in `JIRA <https://osgeo-org.atlassian.net/projects/GEOT>`_ for issues on main; for example, if `main` branch is now ``28-SNAPSHOT``, create a Jira version ``28-RC1`` for the first release of the ``28.x`` series
+* Create the new release candidate version in `JIRA <https://osgeo-org.atlassian.net/projects/GEOT?selectedItem=com.atlassian.jira.jira-projects-plugin%3Arelease-page&status=released-unreleased>`_ for issues on main; for example, if `main` branch is now ``28-SNAPSHOT``, create a Jira version ``28-RC1`` for the first release of the ``28.x`` series
 
 * Create the new ``GeoTools $VER Releases`` (e.g. ``GeoTools 27 Releases``) folder in `SourceForge <https://sourceforge.net/projects/geotools/files/>`__
 
 * Update the jobs on build.geoserver.org:
   
-  * Disable the previous maintenance jobs, and remove them from the geotools view.
+  * Disable the previous maintenance jobs, and remove them from the geotools view. `Job > Configure <https://build.geoserver.org/view/geotools/job/geotools-33.x/configure>`_ > toggle Enabled to Disabled in top right corner.
     
     Even if you wish to continue build prior branches please disable the documentation builds.
 
-  * For the new stable branch create new jobs, duplicate from the two existing ``stable`` jobs (geotools-27.x and geotools-27.x-docs), editing branch specifier to the new branch (e.g. `27.x` -> `28.x`)
+  * For the new stable branch create new jobs, duplicate from the two existing ``stable`` jobs (geotools-27.x and geotools-27.x-docs), editing branch specifier to the new branch (e.g. `27.x` -> `28.x`) and Post-build Actions (geowebcache-1.XX.x,geotools-28.x-docs). GeoTools view https://build.geoserver.org/view/geotools/ > + New Item > geotools-28.x > Copy from > geotools-27.x > Save. Replace versions. Save.
 
 * Announce on the developer mailing list that the new stable branch has been created.
 
@@ -315,7 +315,7 @@ Publish release notes to GitHub tag:
    
    * Release title: `GeoTools 26.1`
    * Write: Paste the markdown from Jira release notes editor
-   * Set as the latest release: only tick this for stable releases, leave unticked for maintenance and support releases
+   * Release label: Choose `Latest` for stable releases, and `None` for maintenance and support releases
 
    Use :guilabel:`Publish release` button to publish the release notes.
    

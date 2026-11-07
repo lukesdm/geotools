@@ -1,0 +1,88 @@
+/*
+ *    GeoTools - The Open Source Java GIS Toolkit
+ *    http://geotools.org
+ *
+ *    (C) 2026, Open Source Geospatial Foundation (OSGeo)
+ *
+ *    This library is free software; you can redistribute it and/or
+ *    modify it under the terms of the GNU Lesser General Public
+ *    License as published by the Free Software Foundation;
+ *    version 2.1 of the License.
+ *
+ *    This library is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *    Lesser General Public License for more details.
+ *
+ */
+package org.geotools.tileverse.rangereader;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import org.junit.Test;
+
+/**
+ * Verifies that {@link RangeReaderParams#toProperties(Map)} accepts pre-{@code storage.*} legacy parameter keys as
+ * emitted by existing GeoServer catalogs.
+ */
+public class RangeReaderParamsTest {
+
+    @Test
+    public void toPropertiesNormalizesLegacyKeys() {
+        Map<String, Object> connectionParams = new HashMap<>();
+        connectionParams.put("pmtiles", "file:///tmp/sample.pmtiles");
+        connectionParams.put("io.tileverse.rangereader.provider", "file");
+        connectionParams.put("io.tileverse.rangereader.caching.enabled", Boolean.TRUE);
+        connectionParams.put("io.tileverse.rangereader.s3.region", "us-west-2");
+
+        Properties props = RangeReaderParams.toProperties(connectionParams);
+
+        assertEquals("file", props.getProperty("storage.provider"));
+        assertEquals("true", props.getProperty("storage.caching.enabled"));
+        assertEquals("us-west-2", props.getProperty("storage.s3.region"));
+        assertFalse(
+                "no legacy keys should remain in the output",
+                props.stringPropertyNames().stream().anyMatch(k -> k.startsWith("io.tileverse.rangereader.")));
+    }
+
+    @Test
+    public void toPropertiesPassesCanonicalKeys() {
+        Map<String, Object> connectionParams = new HashMap<>();
+        connectionParams.put("pmtiles", "file:///tmp/sample.pmtiles");
+        connectionParams.put("storage.provider", "file");
+        connectionParams.put("storage.caching.enabled", Boolean.TRUE);
+
+        Properties props = RangeReaderParams.toProperties(connectionParams);
+
+        assertEquals("file", props.getProperty("storage.provider"));
+        assertEquals("true", props.getProperty("storage.caching.enabled"));
+    }
+
+    @Test
+    public void fileIdleTimeoutFromText() {
+        Map<String, Object> connectionParams = Map.of("storage.file.idle-timeout", "PT30S");
+
+        Properties props = RangeReaderParams.toProperties(connectionParams);
+
+        assertEquals("PT30S", props.getProperty("storage.file.idle-timeout"));
+    }
+
+    @Test
+    public void azureRetryDelayFromText() {
+        Map<String, Object> connectionParams = Map.of("storage.azure.retry-delay", "PT4S");
+
+        Properties props = RangeReaderParams.toProperties(connectionParams);
+
+        assertEquals("PT4S", props.getProperty("storage.azure.retry-delay"));
+    }
+
+    @Test
+    public void durationBindsAsText() {
+        assertEquals(String.class, RangeReaderParams.FILE_IDLE_TIMEOUT.type);
+        assertEquals("PT1M", RangeReaderParams.FILE_IDLE_TIMEOUT.sample);
+    }
+}

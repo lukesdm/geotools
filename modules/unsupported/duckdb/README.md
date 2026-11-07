@@ -1,0 +1,95 @@
+# DuckDB DataStore
+
+The DuckDB DataStore provides read-focused access to DuckDB databases within the GeoTools framework.
+
+[DuckDB](https://duckdb.org/) is an embedded analytical database with strong support for vectorized query execution and spatial workloads. In GeoTools, the `gt-duckdb` module provides the shared DuckDB JDBC integration used directly by the DuckDB store and reused by the GeoParquet module.
+
+## Features
+
+- **DuckDB Database Access**: Connect to in-memory or file-backed DuckDB databases
+- **Native Geometry Support**: Works with DuckDB native `GEOMETRY` columns
+- **Spatial Queries**: Supports spatial filters through the GeoTools JDBC stack
+- **Guarded Public API**: Public access is restricted to the wrapped GeoTools datastore API
+- **GeoTools JDBC Integration**: Supports namespace, fetch size, screenmap, and DuckDB resource limit settings
+
+## Security Model
+
+The public DuckDB store is exposed through a restricted GeoTools-side wrapper.
+
+- Only the guarded GeoTools datastore API is intended for public use
+- The public wrapper does not expose the internal `JDBCDataStore`
+- GeoTools JDBC virtual tables are disabled for the public store
+- Native filters are disabled (`DuckDBFilterToSQL` rejects `NativeFilter`)
+- Initialization SQL is managed internally by GeoTools
+- `read_only=true` is enforced both at the GeoTools API layer and at the DuckDB engine level, so file-backed databases are opened with DuckDB's read-only connection property
+- `memory_limit` and `threads` are applied per datastore instance and translated to DuckDB `SET` statements during connection initialization
+
+This module is intended to reduce the exposed SQL surface while still allowing DuckDB-backed access through standard GeoTools APIs.
+
+## Usage
+
+### In-Memory Database
+
+```java
+Map<String, Object> params = new HashMap<>();
+params.put("dbtype", "duckdb");
+params.put("memory", true);
+
+DataStore store = DataStoreFinder.getDataStore(params);
+```
+
+### File-Backed Database
+
+```java
+Map<String, Object> params = new HashMap<>();
+params.put("dbtype", "duckdb");
+params.put("database", "/path/to/data.duckdb");
+
+DataStore store = DataStoreFinder.getDataStore(params);
+String[] typeNames = store.getTypeNames();
+SimpleFeatureSource source = store.getFeatureSource(typeNames[0]);
+```
+
+### Query Example
+
+```java
+Map<String, Object> params = new HashMap<>();
+params.put("dbtype", "duckdb");
+params.put("database", "/path/to/data.duckdb");
+params.put("screenmap", true);
+
+DataStore store = DataStoreFinder.getDataStore(params);
+SimpleFeatureSource source = store.getFeatureSource("roads");
+
+FilterFactory ff = CommonFactoryFinder.getFilterFactory();
+Filter filter = ff.intersects(
+    ff.property("geom"),
+    ff.literal(geometryFactory.toGeometry(new Envelope(0, 10, 0, 10)))
+);
+
+SimpleFeatureCollection features = source.getFeatures(filter);
+```
+
+## Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **dbtype** | String | Yes | Must be `"duckdb"` |
+| **memory** | Boolean | No | Use an in-memory DuckDB database (default: `false`) |
+| **database** | String | No | Path to a DuckDB database file; required unless `memory=true` |
+| **read_only** | Boolean | No | Open the DuckDB database in read-only mode at both the GeoTools API layer and the engine level (default: `true`) |
+| **memory_limit** | String | No | DuckDB memory limit for the datastore, for example `1GB` |
+| **threads** | Integer | No | DuckDB maximum number of execution threads for the datastore |
+| **namespace** | String | No | Namespace URI to use for features |
+| **fetch size** | Integer | No | JDBC fetch size used for result streaming |
+| **screenmap** | Boolean | No | Enable screenmap support for rendering optimization (default: `true`) |
+
+## Relationship with GeoParquet
+
+`gt-duckdb` is the shared DuckDB foundation module. The GeoParquet datastore depends on it for DuckDB execution, connection management, and SQL dialect support, while keeping GeoParquet-specific metadata and dataset handling in `gt-geoparquet`.
+
+## Notes
+
+- The public store focuses on native DuckDB datasets and guarded API access
+- `read_only` is enabled by default and can be disabled per-store instance
+- `memory_limit` and `threads` are store-scoped DuckDB settings; they do not affect unrelated DuckDB stores in the same JVM

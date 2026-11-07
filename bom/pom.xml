@@ -5,7 +5,7 @@
   <parent>
     <groupId>org.geotools</groupId>
     <artifactId>geotools</artifactId>
-    <version>35-SNAPSHOT</version>
+    <version>36-SNAPSHOT</version>
   </parent>
 
   <artifactId>gt-bom</artifactId>
@@ -198,11 +198,6 @@
       <dependency>
         <groupId>org.geotools.jdbc</groupId>
         <artifactId>gt-jdbc-db2</artifactId>
-        <version>${project.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>org.geotools.jdbc</groupId>
-        <artifactId>gt-jdbc-h2</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
@@ -695,6 +690,11 @@
       <dependency>
         <groupId>org.geotools</groupId>
         <artifactId>gt-geojson-store</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.geotools</groupId>
+        <artifactId>gt-duckdb</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

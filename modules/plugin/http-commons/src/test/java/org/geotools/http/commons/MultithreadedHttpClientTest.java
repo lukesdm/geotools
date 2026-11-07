@@ -23,6 +23,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlMatching;
 
 import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -30,11 +31,13 @@ import com.github.tomakehurst.wiremock.junit.WireMockClassRule;
 import com.github.tomakehurst.wiremock.matching.ContainsPattern;
 import com.github.tomakehurst.wiremock.matching.UrlPattern;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import org.apache.hc.core5.http.HttpException;
 import org.geotools.http.HTTPResponse;
 import org.junit.After;
@@ -174,6 +177,53 @@ public class MultithreadedHttpClientTest {
         }
     }
 
+    /**
+     * HttpClient 5 sends the request line verbatim, unlike HttpClient 4 which percent-encoded it. A capabilities
+     * document exposing an online resource with raw non-ASCII characters must still produce a valid request.
+     */
+    @Test
+    public void testRawUnicodeQueryIsEncoded() throws IOException {
+        service.stubFor(get(urlMatching("/wms.*"))
+                .willReturn(aResponse().withStatus(200).withBody("<ok/>")));
+        URL url = new URL("http://localhost:" + service.port() + "/wms?layers=città&x=y");
+        try (MultithreadedHttpClient sut = new MultithreadedHttpClient()) {
+            sut.get(url);
+        }
+        service.verify(getRequestedFor(urlMatching("/wms.*"))
+                .withQueryParam("layers", equalTo("città"))
+                .withQueryParam("x", equalTo("y")));
+    }
+
+    @Test
+    public void testRawUnicodeQueryIsEncodedOnPost() throws IOException {
+        service.stubFor(post(urlMatching("/wms.*"))
+                .willReturn(aResponse().withStatus(200).withBody("<ok/>")));
+        URL url = new URL("http://localhost:" + service.port() + "/wms?layers=città&x=y");
+        ByteArrayInputStream body = new ByteArrayInputStream("x".getBytes(StandardCharsets.UTF_8));
+        try (MultithreadedHttpClient sut = new MultithreadedHttpClient()) {
+            sut.post(url, body, "text/plain");
+        }
+        service.verify(postRequestedFor(urlMatching("/wms.*"))
+                .withQueryParam("layers", equalTo("città"))
+                .withQueryParam("x", equalTo("y")));
+    }
+
+    /**
+     * Multi-byte (CJK) and astral (emoji, surrogate pair) characters must round-trip through UTF-8 percent-encoding.
+     */
+    @Test
+    public void testMultiByteQueryIsEncoded() throws IOException {
+        service.stubFor(get(urlMatching("/wms.*"))
+                .willReturn(aResponse().withStatus(200).withBody("<ok/>")));
+        URL url = new URL("http://localhost:" + service.port() + "/wms?layers=北京&emoji=😀");
+        try (MultithreadedHttpClient sut = new MultithreadedHttpClient()) {
+            sut.get(url);
+        }
+        service.verify(getRequestedFor(urlMatching("/wms.*"))
+                .withQueryParam("layers", equalTo("北京"))
+                .withQueryParam("emoji", equalTo("😀")));
+    }
+
     @Test
     public void testBasicHeaderGET() throws IOException {
         String longPassword = "0123456789".repeat(10);
@@ -289,6 +339,39 @@ public class MultithreadedHttpClientTest {
         try (MultithreadedHttpClient client = new MultithreadedHttpClient()) {
             response = client.post(url, postBody, "text/plain", Map.of("Authorization", headerValue));
             service.verify(postRequestedFor(urlEqualTo("/test")).withHeader("Authorization", equalTo(headerValue)));
+        } finally {
+            if (response != null) {
+                response.dispose();
+            }
+        }
+    }
+
+    @Test
+    public void testGzipEncodedResponse() throws IOException {
+        String testContent =
+                """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <response>
+            <message>GZipped test content - this is some longer text to ensure proper compression</message>
+        </response>""";
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzipOutputStream = new GZIPOutputStream(byteArrayOutputStream)) {
+            gzipOutputStream.write(testContent.getBytes(StandardCharsets.UTF_8));
+        }
+        byte[] gzipContent = byteArrayOutputStream.toByteArray();
+
+        service.stubFor(get(urlEqualTo("/gzip"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "text/xml")
+                        .withHeader("Content-Encoding", "gzip")
+                        .withBody(gzipContent)));
+
+        HTTPResponse response = null;
+        try (MultithreadedHttpClient client = new MultithreadedHttpClient()) {
+            response = client.get(new URL("http://localhost:" + service.port() + "/gzip"));
+            String result = IOUtils.toString(response.getResponseStream(), StandardCharsets.UTF_8);
+            Assert.assertEquals(testContent, result);
         } finally {
             if (response != null) {
                 response.dispose();

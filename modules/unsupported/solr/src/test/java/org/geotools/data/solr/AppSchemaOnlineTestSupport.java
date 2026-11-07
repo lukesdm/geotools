@@ -25,13 +25,12 @@ import java.io.Serializable;
 import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import javax.xml.parsers.DocumentBuilderFactory;
+import java.util.Properties;
 import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import org.apache.commons.io.FileUtils;
-import org.apache.solr.client.solrj.impl.HttpSolrClient;
+import org.apache.solr.client.solrj.impl.HttpJdkSolrClient;
 import org.geotools.api.data.DataAccess;
 import org.geotools.api.data.DataAccessFinder;
 import org.geotools.api.feature.Feature;
@@ -41,7 +40,10 @@ import org.geotools.data.complex.feature.type.Types;
 import org.geotools.data.solr.SolrTypeData.SolrTypes;
 import org.geotools.data.solr.StationData.Stations;
 import org.geotools.test.OnlineTestCase;
+import org.geotools.util.NullEntityResolver;
 import org.geotools.util.URLs;
+import org.geotools.util.factory.Hints;
+import org.geotools.xml.XMLUtils;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
 import org.w3c.dom.Document;
@@ -74,7 +76,7 @@ public abstract class AppSchemaOnlineTestSupport extends OnlineTestCase {
     protected File tempDir;
     protected File appSchemaCacheDir;
 
-    protected HttpSolrClient client;
+    protected HttpJdkSolrClient client;
     protected DataAccess<FeatureType, Feature> mappingDataStore;
 
     protected void copyTestData(String baseFileName, File destDir) throws IOException {
@@ -93,9 +95,18 @@ public abstract class AppSchemaOnlineTestSupport extends OnlineTestCase {
 
     @Override
     protected void setUpInternal() throws Exception {
+        Hints.putSystemDefault(Hints.ENTITY_RESOLVER, NullEntityResolver.INSTANCE);
+
         configFieldsSetup();
+        TestContainersSupport.solrCoreUrl(CORE_NAME);
+        fixture.setProperty(SOLR_URL_KEY, TestContainersSupport.solrServerUrl());
+        fixture.setProperty(PG_HOST_KEY, TestContainersSupport.postgresHost());
+        fixture.setProperty(PG_PORT_KEY, TestContainersSupport.postgresPort());
+        fixture.setProperty(PG_DATABASE_KEY, TestContainersSupport.postgresDatabase());
+        fixture.setProperty(PG_USER_KEY, TestContainersSupport.postgresUser());
+        fixture.setProperty(PG_PASS_KEY, TestContainersSupport.postgresPassword());
         createTestFolder();
-        client = new HttpSolrClient.Builder(getSolrCoreURL()).build();
+        client = new HttpJdkSolrClient.Builder(getSolrCoreURL()).build();
         solrDataSetup();
         prepareFiles();
         setupDataStore();
@@ -156,30 +167,69 @@ public abstract class AppSchemaOnlineTestSupport extends OnlineTestCase {
     protected void prepareFiles() throws Exception {
         // copy *.xsd
         copyTestData(this.xsdFileName, tempDir);
+        copyAndPatchTestData(this.xmlFileName);
+    }
 
-        // Modify datasource and copy xml
-        File xmlFile = URLs.urlToFile(this.getClass().getResource(testData + xmlFileName));
-        Document doc = DocumentBuilderFactory.newInstance()
-                .newDocumentBuilder()
-                .parse(new InputSource(new FileInputStream(xmlFile)));
-        Node solrDs = doc.getElementsByTagName("SolrDataStore").item(0);
-        NodeList dsChilds = solrDs.getChildNodes();
-        for (int i = 0; i < dsChilds.getLength(); i++) {
-            Node achild = dsChilds.item(i);
-            if (achild.getNodeName().equals("url")) {
-                achild.setTextContent(getSolrCoreURL());
+    protected void copyAndPatchTestData(String baseFileName) throws Exception {
+        File file = URLs.urlToFile(this.getClass().getResource(testData + baseFileName));
+        Document doc = XMLUtils.newDocumentBuilder().parse(new InputSource(new FileInputStream(file)));
+        NodeList solrStores = doc.getElementsByTagName("SolrDataStore");
+        for (int i = 0; i < solrStores.getLength(); i++) {
+            NodeList children = solrStores.item(i).getChildNodes();
+            for (int j = 0; j < children.getLength(); j++) {
+                Node child = children.item(j);
+                if ("url".equals(child.getNodeName())) {
+                    child.setTextContent(getSolrCoreURL());
+                }
             }
         }
-        // write new xml file:
-        TransformerFactory transformerFactory = TransformerFactory.newInstance();
-        Transformer transformer = transformerFactory.newTransformer();
-        DOMSource source = new DOMSource(doc);
-        StreamResult result = new StreamResult(new File(tempDir.getPath() + "/" + xmlFileName));
-        transformer.transform(source, result);
+        NodeList parameters = doc.getElementsByTagName("Parameter");
+        for (int i = 0; i < parameters.getLength(); i++) {
+            NodeList children = parameters.item(i).getChildNodes();
+            String name = null;
+            Node value = null;
+            for (int j = 0; j < children.getLength(); j++) {
+                Node child = children.item(j);
+                if ("name".equals(child.getNodeName())) {
+                    name = child.getTextContent();
+                } else if ("value".equals(child.getNodeName())) {
+                    value = child;
+                }
+            }
+            if (value == null || name == null) {
+                continue;
+            }
+            switch (name) {
+                case "host":
+                    value.setTextContent(fixture.getProperty(PG_HOST_KEY));
+                    break;
+                case "port":
+                    value.setTextContent(fixture.getProperty(PG_PORT_KEY));
+                    break;
+                case "database":
+                    value.setTextContent(fixture.getProperty(PG_DATABASE_KEY));
+                    break;
+                case "user":
+                    value.setTextContent(fixture.getProperty(PG_USER_KEY));
+                    break;
+                case "passwd":
+                    value.setTextContent(fixture.getProperty(PG_PASS_KEY));
+                    break;
+                default:
+                    break;
+            }
+        }
+        Transformer transformer = XMLUtils.newTransformer();
+        transformer.transform(new DOMSource(doc), new StreamResult(new File(tempDir, baseFileName)));
     }
 
     @Override
     protected String getFixtureId() {
         return null;
+    }
+
+    @Override
+    protected Properties createOfflineFixture() {
+        return TestContainersSupport.offlineFixture();
     }
 }

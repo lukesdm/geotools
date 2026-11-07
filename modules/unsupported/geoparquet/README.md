@@ -13,7 +13,6 @@ The GeoParquet DataStore provides read and query access to GeoParquet format dat
 - **Partition Depth Control**: Configure how many levels of partitioning to use with the `max_hive_depth` parameter
 - **Spatial Queries**: Full support for spatial filters (intersects, contains, within, etc.)
 - **Attribute Filters**: Filter data based on attribute values
-- **Geometry Simplification**: Supports on-the-fly geometry simplification for rendering optimization
 - **GeoParquet Metadata**: Parses and utilizes the GeoParquet 'geo' metadata for schema information and optimizations
 - **Precise Geometry Types**: Extracts and uses specific geometry types (Point, LineString, etc.) from GeoParquet metadata
 - **Projection Support**: Handles coordinate reference systems properly
@@ -25,14 +24,16 @@ The GeoParquet DataStore provides read and query access to GeoParquet format dat
 
 ## How It Works
 
-Under the hood, this DataStore uses [DuckDB](https://duckdb.org/) and its Spatial and Parquet extensions to provide high-performance access to GeoParquet files. DuckDB is an embedded analytical database that excels at reading and processing Parquet files. The implementation:
+Under the hood, this DataStore uses [DuckDB](https://duckdb.org/) and its Spatial and Parquet extensions through the shared `gt-duckdb` module. DuckDB is an embedded analytical database that excels at reading and processing Parquet files. The implementation:
 
-1. Creates SQL views over GeoParquet files (local or remote)
+1. Uses the shared DuckDB integration provided by `gt-duckdb`
 2. Detects and manages Hive-partitioned datasets (directory structures with key=value patterns)
 3. Handles GeoParquet metadata parsing and schema detection
 4. Translates GeoTools filters to optimized SQL queries
 5. Converts spatial operations to DuckDB spatial functions
-6. Manages extension loading (spatial, parquet, httpfs)
+6. Manages the required DuckDB initialization internally through GeoTools
+
+The DuckDB execution layer is managed inside GeoTools. Public use of the generic DuckDB store is guarded by the GeoTools-side execution wrapper; GeoParquet uses the same shared infrastructure for its internal managed execution path.
 
 This implementation detail is abstracted away from the user, providing a clean GeoTools DataStore interface.
 
@@ -154,12 +155,20 @@ SimpleFeatureCollection centralBuildings = buildings.getFeatures(filter);
 | **dbtype** | String | Yes | Must be "geoparquet" |
 | **uri** | String | Yes | URI to GeoParquet file or directory (supports file://, https://, s3://) |
 | **max_hive_depth** | Integer | No | Maximum depth of Hive partition hierarchy to use (null = all levels, 0 = none, 1+ = specific level) |
-| **simplify** | Boolean | No | Enable geometry simplification for rendering optimization (default: `true`) |
 | **namespace** | String | No | Namespace URI to use for features |
+| **use_aws_credential_chain** | Boolean | No | Use AWS SDK credential chain for S3 authentication (default: `false`) |
+| **aws_region** | String | No | AWS region for S3 access. Overrides the region from the credential chain. |
+| **aws_profile** | String | No | AWS profile name to load credentials from `~/.aws/credentials` |
+| **endpoint** | String | No | DuckDB S3 endpoint for S3-compatible services such as MinIO |
+| **url_style** | String | No | DuckDB S3 URL style; use `path` for path-style access |
 
-For S3 URIs, you can include authentication parameters:
-```
-s3://bucket/path/to/file.parquet?region=us-west-2&access_key=ACCESS_KEY&secret_key=SECRET_KEY&endpoint=ENDPOINT
+For S3-compatible services, add the endpoint and URL style as datastore parameters:
+
+```java
+params.put("use_aws_credential_chain", true);
+params.put("aws_region", "us-west-2");
+params.put("endpoint", "http://minio.local:9000");
+params.put("url_style", "path");
 ```
 
 ## GeoParquet Metadata Support
@@ -192,18 +201,16 @@ The GeoParquet module has strong typing for Coordinate Reference Systems (CRS):
 ## Optimized Operations
 
 - **Bounds calculation**: Uses GeoParquet metadata or specialized bbox columns when available, falling back to ST_Extent_Agg for general cases
-- **Geometry simplification**: Supports `ST_SimplifyPreserveTopology` for rendering optimization (`ST_Simplify` results in too many empty geometries
-    with the tolerance given by the GeoTools renderer as a Hint).
 - **Query pushdown**: Converts GeoTools filters to optimized SQL queries that filter at the data source
-- **View-based access**: Creates SQL views over Parquet files for efficient querying
+- **Managed dataset access**: Uses internally managed DuckDB objects to query Parquet-backed datasets efficiently
 
 ## Implementation Notes
 
-- The first time a DataStore is created, required DuckDB extensions (spatial, parquet, httpfs) will be installed
+- GeoParquet depends on the shared `gt-duckdb` module for DuckDB connectivity and SQL dialect support
+- Required DuckDB initialization is managed internally by GeoTools
 - For performance reasons, it's recommended to use a persistent DuckDB database when working with very large files repeatedly
 - For remote files, the httpfs extension handles HTTP(S) and S3 communication
 - Each GeoParquet file in a directory appears as a separate feature type in the DataStore
-- On-the-fly geometry simplification uses ST_SimplifyPreserveTopology for best results with rendering
 
 ## Implemented Features
 
@@ -240,6 +247,5 @@ The GeoParquet module has strong typing for Coordinate Reference Systems (CRS):
 ## Dependencies
 
 - GeoTools Core and JDBC modules
-- DuckDB JDBC driver (version specified in the root `pom.xml` for the `org.duckdb:duckdb_jdbc` dependency)
+- `gt-duckdb` (GeoParquet depends on the shared DuckDB module, which brings `org.duckdb:duckdb_jdbc`; the driver version is managed in `build/platform-dependencies/pom.xml`)
 - Jackson Databind (for parsing GeoParquet metadata)
-

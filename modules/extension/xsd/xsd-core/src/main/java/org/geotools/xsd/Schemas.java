@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.xml.XMLConstants;
 import javax.xml.namespace.QName;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
@@ -79,8 +80,13 @@ import org.eclipse.xsd.util.XSDResourceImpl;
 import org.eclipse.xsd.util.XSDSchemaLocationResolver;
 import org.eclipse.xsd.util.XSDSchemaLocator;
 import org.eclipse.xsd.util.XSDUtil;
+import org.geotools.util.DefaultEntityResolver;
 import org.geotools.util.URLs;
 import org.geotools.util.Utilities;
+import org.geotools.util.factory.GeoTools;
+import org.geotools.util.factory.Hints;
+import org.geotools.xml.XMLUtils;
+import org.geotools.xsd.impl.HTTPURIHandler;
 import org.geotools.xsd.impl.SchemaIndexImpl;
 import org.geotools.xsd.impl.TypeWalker;
 import org.picocontainer.ComponentAdapter;
@@ -90,7 +96,9 @@ import org.picocontainer.PicoContainer;
 import org.picocontainer.PicoVisitor;
 import org.xml.sax.Attributes;
 import org.xml.sax.EntityResolver;
+import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
+import org.xml.sax.ext.EntityResolver2;
 import org.xml.sax.helpers.DefaultHandler;
 
 /**
@@ -121,7 +129,7 @@ public class Schemas {
      * @return a {@link SchemaIndex} holding the schemas related to <code>configuration</code>
      */
     public static final SchemaIndex findSchemas(Configuration configuration) {
-        return findSchemas(configuration, null);
+        return findSchemas(configuration, GeoTools.getEntityResolver());
     }
     /**
      * Finds all the XSDSchemas used by the {@link Configuration configuration} by looking at the configuration's schema
@@ -152,21 +160,24 @@ public class Schemas {
 
             String namespaceURI = conf.getNamespaceURI();
             String schemaLocation = null;
-
-            // first check if entity resolver would allow reading the schema location
-            if (entityResolver != null) {
-                try {
-                    entityResolver.resolveEntity(null, conf.getXSD().getSchemaLocation());
-                } catch (IOException | SAXException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-
             try {
                 URL location = new URL(conf.getXSD().getSchemaLocation());
                 schemaLocation = location.toExternalForm();
             } catch (MalformedURLException e) {
                 throw new RuntimeException(e);
+            }
+
+            // first check if entity resolver would allow reading the schema location
+            if (entityResolver != null) {
+                try {
+                    if (entityResolver instanceof EntityResolver2 entityResolver2) {
+                        entityResolver2.resolveEntity(null, null, null, schemaLocation);
+                    } else {
+                        entityResolver.resolveEntity(null, schemaLocation);
+                    }
+                } catch (IOException | SAXException e) {
+                    throw new RuntimeException(e);
+                }
             }
 
             if (LOGGER.isLoggable(Level.FINE)) {
@@ -231,7 +242,7 @@ public class Schemas {
     public static final XSDSchema parse(
             String location, List<XSDSchemaLocator> locators, List<XSDSchemaLocationResolver> resolvers)
             throws IOException {
-        return parse(location, locators, resolvers, emptyList(), null);
+        return parse(location, locators, resolvers, emptyList(), GeoTools.getEntityResolver());
     }
 
     /**
@@ -327,7 +338,6 @@ public class Schemas {
             } catch (SAXException e) {
                 throw new IOException(e);
             }
-
             options.put(XSDResourceImpl.XSD_JAXP_CONFIG, new DefaultJAXPConfiguration() {
 
                 @Override
@@ -527,32 +537,64 @@ public class Schemas {
             List<XSDSchemaLocationResolver> resolvers,
             EntityResolver entityResolver)
             throws IOException {
+        return validateImportsIncludes(location, locators, resolvers, emptyList(), entityResolver);
+    }
+
+    /**
+     * Checks that the imports and includes of a schema can be resolved, walking them from the given location.
+     *
+     * <p>Locations handled by one of the URI handlers are skipped, the parser reads them through the handler.
+     */
+    public static final List validateImportsIncludes(
+            String location,
+            List<XSDSchemaLocator> locators,
+            List<XSDSchemaLocationResolver> resolvers,
+            List<URIHandler> uriHandlers,
+            EntityResolver entityResolver)
+            throws IOException {
 
         // null safety
         if (locators == null) locators = Collections.emptyList();
         if (resolvers == null) resolvers = Collections.emptyList();
 
         // create a parser
-        SAXParserFactory factory = SAXParserFactory.newInstance();
+        Hints hints = GeoTools.getDefaultHints();
+        if (entityResolver != null) {
+            hints.put(Hints.ENTITY_RESOLVER, entityResolver);
+        }
+
+        SAXParserFactory factory;
+        factory = XMLUtils.newSAXParserFactory(hints);
+
         factory.setNamespaceAware(true);
         factory.setValidating(false);
-
         SAXParser parser = null;
         try {
             parser = factory.newSAXParser();
+
         } catch (Exception e) {
             throw (IOException) new IOException("could not create parser").initCause(e);
         }
 
-        if (entityResolver != null) {
-            try {
-                parser.getXMLReader().setEntityResolver(entityResolver);
-            } catch (SAXException e) {
-                throw new IOException(e);
+        try {
+            // XMLUtils has configured parser entity resolver provided by Hints
+            entityResolver = parser.getXMLReader().getEntityResolver();
+            if (entityResolver != null) {
+                try {
+                    parser.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "all");
+                } catch (IllegalArgumentException notSupported) {
+                    LOGGER.fine("Parser does not support ACCESS_EXTERNAL_SCHEMA: " + notSupported.getMessage());
+                }
+                try {
+                    parser.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "all");
+                } catch (IllegalArgumentException notSupported) {
+                    LOGGER.fine("Parser does not support ACCESS_EXTERNAL_SCHEMA: " + notSupported.getMessage());
+                }
             }
+        } catch (SAXException e) {
+            throw new IOException(e);
         }
-
-        SchemaImportIncludeValidator validator = new SchemaImportIncludeValidator(locators, resolvers);
+        SchemaImportIncludeValidator validator = new SchemaImportIncludeValidator(locators, resolvers, entityResolver);
 
         // queue of files to parse
         LinkedList<String> q = new LinkedList<>();
@@ -561,9 +603,30 @@ public class Schemas {
         while (!q.isEmpty()) {
             location = q.removeFirst();
             validator.setBaseLocation(location);
+            // the parser reads these through its URI handler, the walk does not open them. For example, GeoServer
+            // registers a handler that answers DescribeFeatureType requests to itself in process.
+            if (isHandledLocally(uriHandlers, location)) {
+                continue;
+            }
+
+            // validate every location the way the parser reads it, like a nested reference
+            InputSource source = null;
+            if (entityResolver != null) {
+                try {
+                    // the check expects URIs, the walk queues local files as paths
+                    File file = new File(location);
+                    String systemId = file.isAbsolute() ? URLs.fileToUrl(file).toExternalForm() : location;
+                    source = entityResolver.resolveEntity(null, systemId);
+                } catch (SAXException e) {
+                    throw (IOException) new IOException("Could not resolve schema location " + location).initCause(e);
+                }
+            }
+            if (source == null) {
+                source = new InputSource(location);
+            }
 
             try {
-                parser.parse(location, validator);
+                parser.parse(source, validator);
             } catch (SAXException e) {
                 throw (IOException) new IOException("parse error").initCause(e);
             }
@@ -581,6 +644,32 @@ public class Schemas {
         return emptyList();
     }
 
+    /**
+     * Checks if a URI handler other than {@link HTTPURIHandler} can read the location. HTTPURIHandler reads any http
+     * location, so it does not count as local.
+     */
+    private static boolean isHandledLocally(List<URIHandler> uriHandlers, String location) {
+        if (uriHandlers == null) {
+            return false;
+        }
+        URI uri;
+        try {
+            uri = URI.createURI(location);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        // handlers identify the server by host name; validate any location without one here
+        if (uri.host() == null) {
+            return false;
+        }
+        for (URIHandler handler : uriHandlers) {
+            if (!(handler instanceof HTTPURIHandler) && handler.canHandle(uri)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static final class SchemaImportIncludeValidator extends DefaultHandler {
 
         /** base location */
@@ -595,13 +684,32 @@ public class Schemas {
         List<String> errors;
         /** next set of locations to process */
         List<String> next;
+        /** custom entity resolver */
+        EntityResolver entityResolver;
 
+        @Deprecated
         SchemaImportIncludeValidator(List<XSDSchemaLocator> locators, List<XSDSchemaLocationResolver> resolvers) {
+            this(locators, resolvers, DefaultEntityResolver.INSTANCE);
+        }
+
+        SchemaImportIncludeValidator(
+                List<XSDSchemaLocator> locators,
+                List<XSDSchemaLocationResolver> resolvers,
+                EntityResolver entityResolver) {
             this.locators = locators;
             this.resolvers = resolvers;
             seen = new HashSet<>();
             errors = new ArrayList<>();
             next = new ArrayList<>();
+            this.entityResolver = entityResolver == null ? DefaultEntityResolver.INSTANCE : entityResolver;
+        }
+
+        @Override
+        public InputSource resolveEntity(String publicId, String systemId) throws SAXException, IOException {
+            if (entityResolver == null) {
+                return super.resolveEntity(publicId, systemId);
+            }
+            return entityResolver.resolveEntity(publicId, systemId);
         }
 
         public void setBaseLocation(String baseLocation) {
@@ -677,7 +785,7 @@ public class Schemas {
                 }
             }
 
-            // attempt tp resolve manuualy
+            // attempt to resolve manually
             File file = new File(location);
             if (file.exists()) {
                 return file.getAbsolutePath();

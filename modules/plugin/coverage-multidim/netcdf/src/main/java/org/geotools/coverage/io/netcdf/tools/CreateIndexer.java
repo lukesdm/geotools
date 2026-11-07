@@ -25,6 +25,7 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -34,7 +35,6 @@ import javax.imageio.ImageReader;
 import javax.xml.transform.OutputKeys;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 import org.apache.commons.io.FileUtils;
@@ -42,6 +42,7 @@ import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.geotools.imageio.netcdf.NetCDFImageReaderSpi;
 import org.geotools.util.SuppressFBWarnings;
+import org.geotools.xml.XMLUtils;
 import org.jdom2.Document;
 import org.jdom2.Element;
 import org.jdom2.JDOMException;
@@ -115,14 +116,7 @@ public class CreateIndexer {
         System.setProperty("org.geotools.netcdf.quickscan", "TRUE");
 
         File sampleFile = new File(sampleFilePath);
-        File temp = File.createTempFile("XML", "NC");
-        if (!temp.delete()) {
-            throw new IOException("Could not delete temp file: " + temp.getAbsolutePath());
-        }
-
-        if (!temp.mkdir()) {
-            throw new IOException("Could not create temp directory: " + temp.getAbsolutePath());
-        }
+        File temp = Files.createTempDirectory("XML-NC").toFile();
 
         System.setProperty("NETCDF_DATA_DIR", temp.getAbsolutePath());
         System.out.println("Reading sample file: " + sampleFilePath);
@@ -149,6 +143,8 @@ public class CreateIndexer {
         System.out.println("Grabbing the generated xml: " + finalAuxFile);
 
         SAXBuilder saxBuilder = new SAXBuilder();
+        saxBuilder.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+
         Document doc = saxBuilder.build(finalAuxFile);
         Element root = doc.getRootElement();
         Set<String> timeAttributes = new HashSet<>();
@@ -219,7 +215,7 @@ public class CreateIndexer {
 
     private static void formatAuxiliaryXml(File auxiliaryFile, File finalAuxFile)
             throws FileNotFoundException, TransformerException {
-        Transformer transformer = TransformerFactory.newInstance().newTransformer();
+        Transformer transformer = XMLUtils.newTransformer();
         transformer.setOutputProperty(OutputKeys.INDENT, "yes");
         transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
 

@@ -30,15 +30,17 @@ import static org.junit.Assert.assertTrue;
 
 import com.google.common.collect.Streams;
 import io.tileverse.pmtiles.PMTilesTestData;
-import io.tileverse.rangereader.azure.AzureBlobRangeReaderProvider;
-import io.tileverse.rangereader.gcs.GoogleCloudStorageRangeReaderProvider;
-import io.tileverse.rangereader.s3.S3RangeReaderProvider;
-import io.tileverse.rangereader.spi.AbstractRangeReaderProvider;
-import io.tileverse.rangereader.spi.RangeReaderParameter;
+import io.tileverse.storage.NotFoundException;
+import io.tileverse.storage.StorageParameter;
+import io.tileverse.storage.azure.AzureBlobStorageProvider;
+import io.tileverse.storage.file.FileStorageProvider;
+import io.tileverse.storage.gcs.GoogleCloudStorageProvider;
+import io.tileverse.storage.s3.S3StorageProvider;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -96,22 +98,35 @@ public class PMTilesDataStoreFactoryTest {
     }
 
     @Test
+    public void testGetParametersInfoLeavesOutBatchTuning() {
+        List<String> batchKeys = new S3StorageProvider()
+                .getParameters().stream()
+                        .filter(PMTilesDataStoreFactoryTest::isBatchTuning)
+                        .map(StorageParameter::key)
+                        .toList();
+        assertFalse(batchKeys.isEmpty());
+
+        Param[] parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
+        assertTrue(Stream.of(parametersInfo).noneMatch(p -> batchKeys.contains(p.key)));
+    }
+
+    @Test
     public void testGetParametersInfoS3() {
         Param[] parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
 
-        List<RangeReaderParameter<?>> s3Params = new S3RangeReaderProvider().getParameters();
-        assertTrue(s3Params.stream().anyMatch(p -> p.key().contains("io.tileverse.rangereader.s3.")));
+        List<StorageParameter<?>> s3Params = new S3StorageProvider().getParameters();
+        assertTrue(s3Params.stream().anyMatch(p -> p.key().contains("storage.s3.")));
         assertParams(s3Params, parametersInfo);
 
-        System.setProperty(S3RangeReaderProvider.ENABLED_KEY, "false");
+        System.setProperty(S3StorageProvider.ENABLED_KEY, "false");
         try {
             parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
-            List<RangeReaderParameter<?>> noS3Params = s3Params.stream()
-                    .filter(p -> !p.key().contains("io.tileverse.rangereader.s3."))
+            List<StorageParameter<?>> noS3Params = s3Params.stream()
+                    .filter(p -> !p.key().contains("storage.s3."))
                     .toList();
             assertParams(noS3Params, parametersInfo);
         } finally {
-            System.clearProperty(S3RangeReaderProvider.ENABLED_KEY);
+            System.clearProperty(S3StorageProvider.ENABLED_KEY);
         }
     }
 
@@ -119,19 +134,19 @@ public class PMTilesDataStoreFactoryTest {
     public void testGetParametersInfoAzureBlobStorage() {
         Param[] parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
 
-        List<RangeReaderParameter<?>> azureParams = new AzureBlobRangeReaderProvider().getParameters();
-        assertTrue(azureParams.stream().anyMatch(p -> p.key().contains("io.tileverse.rangereader.azure.")));
+        List<StorageParameter<?>> azureParams = new AzureBlobStorageProvider().getParameters();
+        assertTrue(azureParams.stream().anyMatch(p -> p.key().contains("storage.azure.")));
 
         assertParams(azureParams, parametersInfo);
-        System.setProperty(AzureBlobRangeReaderProvider.ENABLED_KEY, "false");
+        System.setProperty(AzureBlobStorageProvider.ENABLED_KEY, "false");
         try {
             parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
-            List<RangeReaderParameter<?>> noAzureParams = azureParams.stream()
-                    .filter(p -> !p.key().contains("io.tileverse.rangereader.azure."))
+            List<StorageParameter<?>> noAzureParams = azureParams.stream()
+                    .filter(p -> !p.key().contains("storage.azure."))
                     .toList();
             assertParams(noAzureParams, parametersInfo);
         } finally {
-            System.clearProperty(AzureBlobRangeReaderProvider.ENABLED_KEY);
+            System.clearProperty(AzureBlobStorageProvider.ENABLED_KEY);
         }
     }
 
@@ -139,39 +154,76 @@ public class PMTilesDataStoreFactoryTest {
     public void testGetParametersInfoGoogleCloudStorage() {
         Param[] parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
 
-        List<RangeReaderParameter<?>> gcsParams = new GoogleCloudStorageRangeReaderProvider().getParameters();
-        assertTrue(gcsParams.stream().anyMatch(p -> p.key().contains("io.tileverse.rangereader.gcs.")));
+        List<StorageParameter<?>> gcsParams = new GoogleCloudStorageProvider().getParameters();
+        assertTrue(gcsParams.stream().anyMatch(p -> p.key().contains("storage.gcs.")));
         assertParams(gcsParams, parametersInfo);
 
-        System.setProperty(GoogleCloudStorageRangeReaderProvider.ENABLED_KEY, "false");
+        System.setProperty(GoogleCloudStorageProvider.ENABLED_KEY, "false");
         try {
             parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
-            List<RangeReaderParameter<?>> noGCSParams = gcsParams.stream()
-                    .filter(p -> !p.key().contains("io.tileverse.rangereader.gcs."))
+            List<StorageParameter<?>> noGCSParams = gcsParams.stream()
+                    .filter(p -> !p.key().contains("storage.gcs."))
                     .toList();
             assertParams(noGCSParams, parametersInfo);
         } finally {
-            System.clearProperty(GoogleCloudStorageRangeReaderProvider.ENABLED_KEY);
+            System.clearProperty(GoogleCloudStorageProvider.ENABLED_KEY);
         }
     }
 
-    private void assertParams(List<RangeReaderParameter<?>> expected, Param[] actual) {
-        expected = new ArrayList<>(expected);
-        expected.remove(AbstractRangeReaderProvider.MEMORY_CACHE_BLOCK_ALIGNED);
-        expected.remove(AbstractRangeReaderProvider.MEMORY_CACHE_BLOCK_SIZE);
+    @Test
+    public void testGetParametersInfoFile() {
+        Param[] parametersInfo = new PMTilesDataStoreFactory().getParametersInfo();
 
+        assertParams(new FileStorageProvider().getParameters(), parametersInfo);
+    }
+
+    // Catalogs persist connection parameters as text
+    @Test
+    public void testCanProcessDurationText() {
+        PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
+        Map<String, Object> params = Map.of(URIP.key, andorra, "storage.file.idle-timeout", "PT30S");
+
+        assertTrue(factory.canProcess(params));
+    }
+
+    @Test
+    public void testRejectsMalformedDuration() {
+        PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
+        Map<String, Object> params = Map.of(URIP.key, andorra, "storage.file.idle-timeout", "30 seconds");
+
+        assertThrows(DateTimeParseException.class, () -> factory.createDataStore(params));
+    }
+
+    // The file reader rejects a timeout below one millisecond, which proves the value reaches it
+    @Test
+    public void testFileIdleTimeoutReachesReader() {
+        PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
+        Map<String, Object> params = Map.of(URIP.key, andorra, "storage.file.idle-timeout", "PT0.0001S");
+
+        assertThrows(IllegalArgumentException.class, () -> factory.createDataStore(params));
+    }
+
+    private void assertParams(List<StorageParameter<?>> expected, Param[] actual) {
         List<Param> dataStoreParams = new ArrayList<>(Arrays.asList(actual));
         dataStoreParams.remove(URIP);
         dataStoreParams.remove(NAMESPACEP);
 
-        for (RangeReaderParameter<?> param : expected) {
+        for (StorageParameter<?> param : expected) {
+            if (isBatchTuning(param)) {
+                continue;
+            }
             Param expectedParam = RangeReaderParams.dataStoreParam(param);
             assertTrue(dataStoreParams.contains(expectedParam));
         }
     }
 
+    /** The batch-read tuning is left out of the datastore parameters, see {@link RangeReaderParams#PROVIDER_PARAMS} */
+    private static boolean isBatchTuning(StorageParameter<?> param) {
+        return StorageParameter.GROUP_BATCH.equals(param.group());
+    }
+
     private void assertCachingParameters(Param[] parametersInfo) {
-        Predicate<? super Param> filter = p -> p.key.startsWith("io.tileverse.rangereader.caching.");
+        Predicate<? super Param> filter = p -> p.key.startsWith("storage.caching.");
         List<Param> cachingParams = Stream.of(parametersInfo).filter(filter).toList();
         List<Param> expected = List.of(RangeReaderParams.MEMORY_CACHE_ENABLED);
         assertEquals(expected, cachingParams);
@@ -190,13 +242,13 @@ public class PMTilesDataStoreFactoryTest {
 
         assertFalse(factory.canProcess(Map.of()));
         assertFalse(factory.canProcess(Map.of(URIP.key, "not a valid URI")));
-        assertFalse(factory.canProcess(Map.of(URIP.key + "1", andorra.toUri())));
+        assertFalse(factory.canProcess(Map.of(URIP.key + "1", andorra)));
 
         URI notfound = tmp.getRoot().toPath().resolve("notfound.pmtiles").toUri();
         assertTrue(factory.canProcess(Map.of(URIP.key, notfound)));
         assertTrue(factory.canProcess(Map.of(URIP.key, notfound, NAMESPACEP.key, "pmtiles.io")));
 
-        assertTrue("should support URI", factory.canProcess(Map.of(URIP.key, andorra.toUri())));
+        assertTrue("should support URI", factory.canProcess(Map.of(URIP.key, andorra)));
         assertTrue(
                 "should support String",
                 factory.canProcess(Map.of(URIP.key, andorra.toAbsolutePath().toString())));
@@ -231,7 +283,9 @@ public class PMTilesDataStoreFactoryTest {
     public void testCreateDataStoreNotFound() {
         PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
         URI notfound = tmp.getRoot().toPath().resolve("notfound.pmtiles").toUri();
-        assertThrows(IOException.class, () -> factory.createDataStore(Map.of(URIP.key, notfound)));
+        // tileverse-storage 2.0 surfaces missing-key errors as unchecked NotFoundException (extends StorageException
+        // / RuntimeException) rather than IOException.
+        assertThrows(NotFoundException.class, () -> factory.createDataStore(Map.of(URIP.key, notfound)));
     }
 
     @Test
@@ -246,6 +300,45 @@ public class PMTilesDataStoreFactoryTest {
 
     private void testCreateDataStore(PMTilesDataStoreFactory factory, Object uri) throws IOException {
         PMTilesDataStore store = factory.createDataStore(Map.of(URIP.key, uri));
+        try {
+            assertNotNull(store);
+        } finally {
+            if (store != null) store.dispose();
+        }
+    }
+
+    /**
+     * Forward compatibility check: {@link PMTilesDataStoreFactory#canProcess(Map)} must accept connection parameters
+     * that use the {@code storage.*} prefix (canonical in tileverse 2.x). Required-param validation in
+     * {@code DataStoreFactorySpi.canProcess} is keyed off the factory's canonical {@code io.tileverse.rangereader.*}
+     * {@link Param}s, so input keys must be normalized first.
+     */
+    @Test
+    public void testCanProcessWithFutureStorageKeys() {
+        PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
+        Map<String, Object> params =
+                Map.of(URIP.key, andorra, "storage.provider", "file", "storage.caching.enabled", Boolean.TRUE);
+        assertTrue(factory.canProcess(params));
+    }
+
+    /**
+     * Forward compatibility check: a DataStoreInfo persisted by a future tileverse consumer may include
+     * {@code storage.*} connection parameters this factory does not expose. Store creation must tolerate them --
+     * {@link RangeReaderParams#toProperties(Map)} passes them through for the storage provider to interpret or ignore.
+     */
+    @Test
+    public void testCreateDataStoreWithFutureStorageKeys() throws IOException {
+        PMTilesDataStoreFactory factory = new PMTilesDataStoreFactory();
+        Map<String, Object> params = Map.of(
+                URIP.key,
+                andorra,
+                "storage.provider",
+                "file",
+                "storage.caching.enabled",
+                Boolean.TRUE,
+                "storage.caching.futuresetting",
+                "some future value");
+        PMTilesDataStore store = factory.createDataStore(params);
         try {
             assertNotNull(store);
         } finally {

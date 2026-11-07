@@ -20,7 +20,6 @@ package org.geotools.renderer.label;
 import java.awt.font.FontRenderContext;
 import java.awt.font.GlyphVector;
 import java.awt.font.LineMetrics;
-import java.awt.font.TextLayout;
 import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,15 +44,14 @@ class LineInfo {
         // the text represented as a glyph vector
         private GlyphVector gv;
 
-        // the text layout
-        private TextLayout layout;
-
         Rectangle2D visualBounds;
 
-        LineComponent(String text, GlyphVector gv, TextLayout layout) {
+        private final LineMetrics lineMetrics;
+
+        LineComponent(String text, GlyphVector gv, LineMetrics lineMetrics) {
             this.text = text;
             this.gv = gv;
-            this.layout = layout;
+            this.lineMetrics = lineMetrics;
         }
 
         Rectangle2D getVisualBounds() {
@@ -79,8 +77,8 @@ class LineInfo {
             return gv;
         }
 
-        TextLayout getLayout() {
-            return layout;
+        LineMetrics getMetrics() {
+            return lineMetrics;
         }
 
         /**
@@ -98,6 +96,8 @@ class LineInfo {
 
     /** The components of the line */
     private List<LineComponent> components;
+
+    private double lineHeight = Double.NaN;
 
     LineInfo() {
         components = new ArrayList<>();
@@ -126,7 +126,7 @@ class LineInfo {
             // the logical bounds include the spaces, we want them in the horizontal direction
             // in order to compose the element in the row, but we need the visual bounds for
             // vertical alignment
-            Rectangle2D verticalBounds = lineComponent.getGlyphVector().getVisualBounds();
+            Rectangle2D verticalBounds = lineComponent.getVisualBounds();
             Rectangle2D horizontalBounds = lineComponent.getGlyphVector().getLogicalBounds();
             // However... for empty text (used to place symbols along a line with conflict res.)
             // we have to use the logical bounds even for the vertical direction, as the visual
@@ -161,8 +161,8 @@ class LineInfo {
     float getLineOffset() {
         float offset = Float.NEGATIVE_INFINITY;
         for (LineComponent component : components) {
-            TextLayout layout = component.getLayout();
-            float co = layout.getAscent() + layout.getDescent() + layout.getLeading();
+            LineMetrics metrics = component.getMetrics();
+            float co = metrics.getAscent() + metrics.getDescent() + metrics.getLeading();
             if (co > offset) {
                 offset = co;
             }
@@ -174,8 +174,8 @@ class LineInfo {
     double getDescentLeading() {
         float descent = Float.NEGATIVE_INFINITY;
         for (LineComponent component : components) {
-            TextLayout layout = component.getLayout();
-            float de = layout.getDescent() + layout.getLeading();
+            LineMetrics metrics = component.getMetrics();
+            float de = metrics.getDescent() + metrics.getLeading();
             if (de > descent) {
                 descent = de;
             }
@@ -185,21 +185,19 @@ class LineInfo {
     }
 
     double getLineHeight() {
+        if (!Double.isNaN(lineHeight)) return lineHeight;
         double height = Float.NEGATIVE_INFINITY;
         for (LineComponent component : components) {
-            double ch = component.getGlyphVector().getVisualBounds().getHeight();
-            if (ch > height) {
-                height = ch;
-            }
+            double ch = component.getVisualBounds().getHeight();
+            if (ch > height) height = ch;
         }
-
-        return height;
+        return lineHeight = height;
     }
 
     float getAscent() {
         float ascent = Float.NEGATIVE_INFINITY;
         for (LineComponent component : components) {
-            float ca = component.getLayout().getAscent();
+            float ca = component.getMetrics().getAscent();
             if (ca > ascent) {
                 return ascent;
             }

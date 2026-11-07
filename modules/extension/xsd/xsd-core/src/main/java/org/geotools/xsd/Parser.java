@@ -31,11 +31,13 @@ import javax.xml.parsers.SAXParserFactory;
 import javax.xml.transform.Source;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import org.eclipse.emf.ecore.resource.URIHandler;
 import org.eclipse.xsd.XSDSchema;
+import org.geotools.util.factory.GeoTools;
+import org.geotools.util.factory.Hints;
 import org.geotools.util.logging.Logging;
+import org.geotools.xml.XMLUtils;
 import org.geotools.xs.XS;
 import org.geotools.xsd.impl.ParserHandler;
 import org.geotools.xsd.impl.ParserHandler.ContextCustomizer;
@@ -78,11 +80,10 @@ public class Parser {
     /** sax handler which maintains the element stack */
     private ParserHandler handler;
 
-    /** the sax parser driving the handler */
-    private SAXParser parser;
-
-    /** Entity expansion limit configuration, set to null by default */
+    /** Entity expansion limit configuration, set to {@code null} for default {@code DEFAULT_ENTITY_EXPANSION_LIMIT}. */
     private Integer entityExpansionLimit;
+    /** Allow DTD configuration, set to {@code false} by default */
+    private boolean allowDTD = false;
 
     /**
      * Creates a new instance of the parser.
@@ -91,11 +92,20 @@ public class Parser {
      *     </code>.
      */
     public Parser(Configuration configuration) {
+        this(configuration, GeoTools.getEntityResolver());
+    }
+    /**
+     * Creates a new instance of the parser.
+     *
+     * @param configuration The parser configuration, bindings and context, must never be {@code }null}
+     * @param entityResolver EntityResolver used to allow access to xsd assets during parsing
+     */
+    public Parser(Configuration configuration, EntityResolver entityResolver) {
         if (configuration == null) {
             throw new NullPointerException("configuration");
         }
-
         handler = new ParserHandler(configuration);
+        handler.setEntityResolver(entityResolver);
 
         configuration.setupParser(this);
     }
@@ -136,28 +146,25 @@ public class Parser {
 
     /**
      * Parses an instance document defined by a transformer source.
-     * <p>
-     * Note: Currently this method reads the entire source into memory in order to validate
-     * it. If large documents must be parsed one of {@link #
-     * </p>
+     *
+     * <p>Note: Currently this method reads the entire source into memory in order to validate it. If large documents
+     * must be parsed one of the other parse methods should be used instead.
+     *
      * @param source THe source of the instance document.
-     *
      * @return @return The object representation of the root element of the document.
-     *
-     *
      * @since 2.6
      */
     public Object parse(Source source)
             throws IOException, SAXException, ParserConfigurationException, TransformerException {
-        // TODO: use SAXResult to stream, need to figure out how to enable
-        // validation with transformer api
+
+        // TODO: use SAXResult to stream, need to figure out how to enable validation with transformer api
         // SAXResult result = new SAXResult( handler );
+
         StreamResult result = new StreamResult(new ByteArrayOutputStream());
+        Transformer tx = XMLUtils.newTransformer();
 
-        TransformerFactory tf = TransformerFactory.newInstance();
-        Transformer tx = tf.newTransformer();
-
-        tx.transform(source, result);
+        Source checkedSource = XMLUtils.source(source, null);
+        tx.transform(checkedSource, result);
 
         return parse(new ByteArrayInputStream(((ByteArrayOutputStream) result.getOutputStream()).toByteArray()));
     }
@@ -171,8 +178,12 @@ public class Parser {
      * @return The object representation of the root element of the document.
      */
     public Object parse(InputSource source) throws IOException, SAXException, ParserConfigurationException {
-        parser = parser();
-
+        SAXParser parser = parser();
+        if (handler.getEntityResolver() == null) {
+            LOGGER.warning("Parsing with no entity resolver configured");
+        } else {
+            LOGGER.fine("Parsing with entity resolver: " + handler.getEntityResolver());
+        }
         parser.parse(source, handler);
 
         return handler.getValue();
@@ -411,7 +422,12 @@ public class Parser {
     protected SAXParser parser(boolean validate) throws ParserConfigurationException, SAXException {
         // JD: we use xerces directly here because jaxp does seem to allow use to
         // override all the namespaces to validate against
-        SAXParserFactory pFactory = SAXParserFactory.newInstance();
+
+        Hints hints = GeoTools.getDefaultHints();
+        if (getEntityResolver() != null) {
+            hints.put(Hints.ENTITY_RESOLVER, getEntityResolver());
+        }
+        SAXParserFactory pFactory = XMLUtils.newSAXParserFactory(hints);
 
         // set the appropriate features
         pFactory.setFeature("http://xml.org/sax/features/namespaces", true);
@@ -421,8 +437,14 @@ public class Parser {
             pFactory.setFeature("http://apache.org/xml/features/validation/schema", true);
             pFactory.setFeature("http://apache.org/xml/features/validation/schema-full-checking", true);
         }
-
-        SAXParser parser = pFactory.newSAXParser();
+        if (allowDTD) {
+            XMLUtils.supportDTD(pFactory, true, hints);
+        }
+        SAXParser parser = XMLUtils.newSAXParser(pFactory, hints);
+        if (parser.getXMLReader().getEntityResolver() != getEntityResolver()) {
+            LOGGER.fine("Force entity resolver if required:" + getEntityResolver());
+            parser.getXMLReader().setEntityResolver(getEntityResolver());
+        }
 
         // set the schema sources of this configuration, and all dependent ones
         StringBuffer schemaLocation = new StringBuffer();
@@ -449,11 +471,14 @@ public class Parser {
                 "http://apache.org/xml/properties/schema/external-schemaLocation", schemaLocation.toString());
         // add the handler as a LexicalHandler too.
         parser.setProperty(SAX_PROPERTY_PREFIX + LEXICAL_HANDLER_PROPERTY, handler);
+
         // set Entity expansion limit
         setupEntityExpansionLimit(parser);
 
-        //
-        // return builded parser
+        // Set allow DTD
+        if (this.allowDTD) XMLUtils.supportDTD(parser, true, hints);
+
+        // return built parser
         return parser;
     }
 
@@ -476,5 +501,9 @@ public class Parser {
 
     public void setEntityExpansionLimit(Integer entityExpansionLimit) {
         this.entityExpansionLimit = entityExpansionLimit;
+    }
+
+    public void setAllowDTD(boolean allowDTD) {
+        this.allowDTD = allowDTD;
     }
 }
